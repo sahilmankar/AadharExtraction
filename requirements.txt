@@ -1,0 +1,10 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.18
+pydantic-settings>=2.4.0
+python-dotenv>=1.0.1
+dependency-injector>=4.45.0
+paddleocr>=2.8.0
+numpy>=1.26,<3
+opencv-python>=4.10
+PyMuPDF>=1.24
