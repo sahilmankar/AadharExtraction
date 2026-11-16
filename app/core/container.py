@@ -4,6 +4,7 @@ from app.services.extractor_service import AadhaarExtractorService
 from app.services.media_service import MediaService
 from app.services.ocr_service import OCRService
 from app.services.processing_service import DocumentProcessingService
+from app.services.qr_service import AadhaarQRService
 
 
 class Container(containers.DeclarativeContainer):
@@ -17,18 +18,13 @@ class Container(containers.DeclarativeContainer):
     media_service = providers.Singleton(
         MediaService,
         max_upload_bytes=config.max_upload_bytes,
-        max_image_pixels=config.max_image_pixels,
         max_pdf_pages=config.max_pdf_pages,
         pdf_render_dpi=config.pdf_render_dpi,
     )
-    file_service = media_service
-    image_service = media_service
 
     # Multi-worker OCR Engine Pool singleton
     ocr_service = providers.Singleton(
         OCRService,
-        language=config.ocr_lang,
-        device=config.ocr_device,
         models_dir=config.models_dir,
         det_model=config.ocr_det_model,
         rec_model=config.ocr_rec_model,
@@ -37,6 +33,7 @@ class Container(containers.DeclarativeContainer):
     )
 
     extractor_service = providers.Singleton(AadhaarExtractorService)
+    qr_service = providers.Singleton(AadhaarQRService)
 
     # Document Orchestrator Factory
     document_processor = providers.Factory(
@@ -44,4 +41,5 @@ class Container(containers.DeclarativeContainer):
         media_service=media_service,
         ocr_service=ocr_service,
         extractor_service=extractor_service,
+        qr_service=qr_service,
     )

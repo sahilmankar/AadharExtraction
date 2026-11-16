@@ -30,14 +30,18 @@ class OCRService:
         models_dir: str = "models",
         det_model: str = "PP-OCRv5_mobile_det",
         rec_model: str = "devanagari_PP-OCRv5_mobile_rec",
+        det_limit: int = 960,
+        rec_batch_size: int = 6,
         pool_size: int = 2,
-        threads: int = 4,
+        threads: int = 6,
     ):
         self.language = language
         self.device = device
         self.models_dir = os.path.abspath(models_dir)
         self.det_model = det_model
         self.rec_model = rec_model
+        self.det_limit = det_limit
+        self.rec_batch_size = rec_batch_size
         self.pool_size = pool_size
 
         os.environ["PADDLE_PDX_CACHE_HOME"] = self.models_dir
@@ -50,17 +54,23 @@ class OCRService:
 
     def _create_engine(self):
         from paddleocr import PaddleOCR
-        return PaddleOCR(
-            lang=self.language,
-            device=self.device,
-            text_detection_model_name=self.det_model,
-            text_recognition_model_name=self.rec_model,
-            text_det_limit_side_len=960,
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-            engine="paddle",
-        )
+        kwargs: dict[str, Any] = {
+            "device": self.device,
+            "text_det_limit_side_len": self.det_limit,
+            "text_recognition_batch_size": self.rec_batch_size,
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+            "engine": "paddle",
+        }
+        if self.det_model:
+            kwargs["text_detection_model_name"] = self.det_model
+        if self.rec_model:
+            kwargs["text_recognition_model_name"] = self.rec_model
+        if not self.det_model and not self.rec_model:
+            kwargs["lang"] = self.language
+
+        return PaddleOCR(**kwargs)
 
     def _init_pool(self):
         logger.info("Initializing OCR engine pool (size=%d, models_dir=%s)...", self.pool_size, self.models_dir)

@@ -95,8 +95,6 @@ class MediaService:
             "warnings": warnings,
         }
 
-    analyze = analyze_quality  # Alias for backward compatibility
-
     def normalize(self, image: np.ndarray, max_dim: int = 2000) -> np.ndarray:
         h, w = image.shape[:2]
         if max(h, w) > max_dim:
@@ -130,6 +128,83 @@ class MediaService:
         except Exception:
             pass
         return image
+
+    def analyze_visual_authenticity(self, image: np.ndarray) -> dict:
+        """
+        Validates whether an image represents an authentic physical/digital Aadhaar card
+        rather than plain typed text or empty paper.
+        Evaluates aspect ratio (CR80/ID-1), 2D QR code presence, Aadhaar color palette
+        (saffron, green, UIDAI maroon), and portrait/vibrancy density.
+        """
+        h, w = image.shape[:2]
+        aspect_ratio = round(float(w / h) if h > 0 else 0.0, 3)
+        total_pixels = max(1, w * h)
+
+        # 1. Aspect Ratio: Standard Aadhaar card ratio is ~1.586 (tolerance 1.20 to 1.90)
+        is_card_aspect = 1.20 <= aspect_ratio <= 1.90
+
+        # 2. QR Code Pattern: Back side or e-Aadhaar contains high-density 2D QR code
+        qr_detected = False
+        try:
+            detector = cv2.QRCodeDetector()
+            ret, points = detector.detect(image)
+            if ret and points is not None and len(points) > 0:
+                pts = points[0] if len(points.shape) == 3 else points
+                if len(pts) == 4:
+                    area = cv2.contourArea(pts.astype(np.float32))
+                    # Genuine card QR occupies between 2% and 45% of the card area
+                    if (0.02 * total_pixels) <= area <= (0.45 * total_pixels):
+                        d01 = np.linalg.norm(pts[0] - pts[1])
+                        d12 = np.linalg.norm(pts[1] - pts[2])
+                        if d01 > 0 and d12 > 0:
+                            ratio = max(d01, d12) / min(d01, d12)
+                            if ratio <= 1.35:  # must be approximately square
+                                qr_detected = True
+        except Exception:
+            qr_detected = False
+
+        # 3. Aadhaar Palette: Saffron/Orange top stripe, Green bottom, UIDAI Red/Maroon header
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV) if len(image.shape) == 3 else None
+        has_aadhaar_palette = False
+        color_vibrancy_pct = 0.0
+
+        if hsv is not None:
+            saffron = cv2.inRange(hsv, np.array([5, 50, 100]), np.array([25, 255, 255]))
+            green = cv2.inRange(hsv, np.array([35, 40, 40]), np.array([85, 255, 255]))
+            red1 = cv2.inRange(hsv, np.array([0, 70, 70]), np.array([10, 255, 255]))
+            red2 = cv2.inRange(hsv, np.array([170, 70, 70]), np.array([180, 255, 255]))
+            red = cv2.bitwise_or(red1, red2)
+
+            saffron_pct = round(float(np.count_nonzero(saffron)) / total_pixels * 100, 2)
+            green_pct = round(float(np.count_nonzero(green)) / total_pixels * 100, 2)
+            red_pct = round(float(np.count_nonzero(red)) / total_pixels * 100, 2)
+            sat = hsv[:, :, 1]
+            color_vibrancy_pct = round(float(np.count_nonzero(sat > 40)) / total_pixels * 100, 2)
+
+            has_aadhaar_palette = (saffron_pct >= 0.5 or red_pct >= 0.5) and (green_pct >= 0.3 or red_pct >= 0.5)
+
+        # 4. Portrait / Graphics presence (non-text graphical blocks)
+        has_photo_or_graphics = color_vibrancy_pct > 3.0
+
+        # Authenticity scoring
+        checks = [
+            (is_card_aspect, 20, "VALID_ASPECT_RATIO"),
+            (has_aadhaar_palette, 25, "AADHAAR_PALETTE_DETECTED"),
+            (has_photo_or_graphics, 25, "GRAPHICS_OR_PORTRAIT_REGION_DETECTED"),
+            (qr_detected, 30, "SECURE_QR_PATTERN_DETECTED"),
+        ]
+        score = sum(pts for cond, pts, _ in checks if cond)
+        checks_passed = [flag for cond, _, flag in checks if cond]
+
+        return {
+            "is_valid_aadhaar_card_image": score >= 50,
+            "authenticity_score": score,
+            "aspect_ratio": aspect_ratio,
+            "qr_detected": qr_detected,
+            "has_aadhaar_palette": has_aadhaar_palette,
+            "has_photo_or_graphics": has_photo_or_graphics,
+            "checks_passed": checks_passed,
+        }
 
     def prepare_page_image(self, raw_image: np.ndarray) -> tuple[dict, np.ndarray]:
         """Single-pass quality diagnostics, dimension normalization, and card ROI isolation."""

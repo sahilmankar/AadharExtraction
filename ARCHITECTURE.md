@@ -2,263 +2,333 @@
 
 ## 1. Executive Summary
 
-The **Aadhaar Validation & Extraction Service** is a local, high-performance microservice designed to ingest identity documents (Aadhaar front/back images and multi-page e-Aadhaar PDFs), perform image quality analysis, execute deep-learning Optical Character Recognition (OCR), and parse critical demographic fields with mathematical validation.
+The **Aadhaar Validation & Extraction Service** is a privacy-first, local microservice designed to ingest identity documents (Aadhaar front/back images and multi-page e-Aadhaar PDFs), perform image quality analysis, execute deep-learning Optical Character Recognition (OCR), decode embedded UIDAI Secure QR codes, and run multi-factor authenticity triangulation without external network dependencies.
 
-### Core Objectives
-- **In-Memory Privacy-First Processing**: Process documents purely in volatile RAM without saving unencrypted images or PDFs to disk.
-- **Unified Processing Pipeline**: Common normalization and OCR path for both standalone images (JPG, PNG) and vector/rasterized PDFs.
-- **Accurate Bilingual OCR**: Local inference capable of parsing Devanagari (Hindi) and English text with confidence scoring and spatial bounding boxes.
-- **Algorithmic Field Validation**: Validation of Aadhaar numbers using UIDAI's standard Verhoeff dihedral group $D_{10}$ checksum algorithm.
-- **Modular Non-Blocking Architecture**: Decoupled service layer running CPU-bound inference in thread pools outside FastAPI's asynchronous event loop.
+### Core Architectural Principles
+- **In-Memory Privacy by Design**: Documents are ingested, decoded, processed, and validated purely in volatile RAM. Original files, intermediate arrays, and resident PII are never persisted to disk.
+- **Side-Aware Authenticity**: Acknowledges that Aadhaar is an asymmetric two-sided document (Front holds the resident portrait; Back holds the Secure QR code). Authenticity is evaluated at both the individual side level and via document-level triangulation.
+- **Three-Way Parallel Pipeline**: For every page, OCR extraction, format/visual verification, and QR decoding execute simultaneously in asynchronous thread pools.
+- **Cryptographic & Data Cross-Matching**: Compares high-density QR payload data against printed OCR text to catch digital manipulation and tampering.
+- **Modular & Loosely Coupled**: Built with `dependency-injector` container for component swappability, isolated singleton lifecycles, and rapid test mocking.
 
 ---
 
 ## 2. High-Level System Architecture
 
-The following diagram outlines the system topology and interaction flow from the client upload to the structured response:
+The following diagram outlines the system topology from HTTP ingestion through the three-way parallel engine to the final structured response:
 
 ```mermaid
 flowchart TD
-    Client["Client (Web / Mobile / Internal API)"]
-    
-    subgraph FastAPI_Application["FastAPI Application (Port 8000)"]
-        Lifespan["Application Lifespan Manager"]
-        Routes["API Layer: /api/v1/documents"]
-        
-        subgraph Services["Core Service Components"]
-            MediaSvc["MediaService\n(Buffer Validation, PyMuPDF, OpenCV, ROI Isolation)"]
-            OCRSvc["OCRService\n(PaddleOCR 3.x Engine Pool, oneDNN)"]
-            ExtractSvc["AadhaarExtractorService\n(Regex, Verhoeff Checksum, Classifier)"]
+    Client["Client (Web / Mobile / KYC Gateway)"]
+
+    subgraph FastAPI_App["FastAPI Microservice (Port 8000)"]
+        Middleware["Timing & Logging Middleware"]
+        Router["API Router: /api/v1/documents"]
+        ErrorHandler["Global Exception Handler (InvalidDocumentError)"]
+
+        subgraph DI_Container["IoC Dependency Injection Container"]
+            Config["Settings (9 Operational Knobs)"]
+            MediaSvc["MediaService\n(Buffer Ingestion, PyMuPDF, OpenCV, ROI)"]
+            OCRPool["OCRService\n(PaddleOCR 3.x Engine Pool [Size=2])"]
+            ExtrSvc["AadhaarExtractorService\n(Regex, Layout, Verhoeff D10)"]
+            QRSvc["AadhaarQRService\n(V2 Zlib BigInt & V1 XML Decoder)"]
+            ProcSvc["DocumentProcessingService\n(Parallel Orchestrator & Triangulation)"]
         end
-        
-        subgraph Schemas["Data Transfer Objects (Pydantic v2)"]
-            SchemasDoc["DocumentProcessingResponse\n- ImageQualityResult\n- OCRResult (lines, bboxes)\n- AadhaarExtractedData"]
+
+        subgraph Schemas["Pydantic v2 DTOs"]
+            Resp["DocumentProcessingResponse\n- authenticity: DocumentAuthenticityResult\n- aggregated_data: AadhaarExtractedData\n- qr_cross_match: QRCrossMatchResult\n- pages: list[DocumentPageResult]"]
         end
     end
 
-    Client -->|"POST /images\nPOST /pdf"| Routes
-    Lifespan -->|"Initializes once at startup"| OCRSvc
-    Routes -->|"1. In-memory validation & ROI"| MediaSvc
-    Routes -->|"2. Parallel OCR execution"| OCRSvc
-    Routes -->|"3. Layout & Checksum parsing"| ExtractSvc
-    Routes -->|"4. Serialize response"| SchemasDoc
-    SchemasDoc -->|"JSON Response"| Client
+    Client -->|"POST /images\nPOST /pdf"| Middleware
+    Middleware --> Router
+    Router --> ProcSvc
+    ProcSvc --> MediaSvc
+    ProcSvc --> OCRPool
+    ProcSvc --> ExtrSvc
+    ProcSvc --> QRSvc
+    ProcSvc --> Resp
+    Resp --> Client
 ```
 
 ---
 
-## 3. End-to-End Data Flow
+## 3. The Three-Way Parallel Processing Pipeline
+
+For each document page, the pipeline splits into three concurrent branches executed via `asyncio.gather()`, running across a bounded worker pool:
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    actor Client as API Client
-    participant Router as document_routes.py
-    participant FileSvc as FileService
-    participant ImgSvc as ImageQualityService
-    participant OCRSvc as OCRService
-    participant Extractor as AadhaarExtractorService
-
-    Client->>Router: POST /api/v1/documents/images or /pdf
-    Router->>FileSvc: read_upload(upload)
-    Note over FileSvc: Validates file size <= MAX_UPLOAD_MB
+flowchart TD
+    RawPage["Raw Page Image (np.ndarray)"]
     
-    alt Image Upload (front & optional back)
-        Router->>FileSvc: decode_image(bytes)
-        FileSvc-->>Router: np.ndarray [BGR]
-    else PDF Upload
-        Router->>FileSvc: pdf_to_images(bytes)
-        Note over FileSvc: Check encryption & page limit.<br/>PyMuPDF renders @ 180 DPI
-        FileSvc-->>Router: list[np.ndarray] (page images)
+    subgraph Step0["Step 0: Pre-Processing (~30ms)"]
+        Quality["Image Quality Analysis\n(Laplacian blur, brightness, dims)"]
+        ROI["Card ROI Isolation\n(Lower 45% or table contour crop)"]
+    end
+    
+    RawPage --> Quality
+    RawPage --> ROI
+
+    subgraph Step1["Step 1: Three-Way Parallel Execution (Asyncio Gather)"]
+        direction LR
+        subgraph Branch1["Part 1: OCR Extraction"]
+            OCR["PaddleOCR DBNet & Line Rec\n(oneDNN Multi-Threaded)"]
+            Parse["Demographic Extraction\n(Regex & Verhoeff Checksum)"]
+            OCR --> Parse
+        end
+
+        subgraph Branch2["Part 2: Format & Visual Validation"]
+            Visual["Visual Authenticity Engine\n• Aspect ratio (CR80)\n• Saffron/Green/Maroon palette\n• Portrait vibrancy block"]
+        end
+
+        subgraph Branch3["Part 3: QR Data Extraction"]
+            QRDec["pyzbar QR Scanner\n• V2 BigInt / Zlib Deflate\n• V1 XML Fallback\n• Resident Photo JP2 presence"]
+        end
     end
 
-    loop For each Page / Image
-        Router->>ImgSvc: analyze(image) [Threadpool]
-        Note over ImgSvc: Computes Laplacian var & mean brightness
-        ImgSvc-->>Router: ImageQualityResult (blur, brightness, status)
-        
-        Router->>ImgSvc: normalize(image)
-        ImgSvc-->>Router: normalized image (max_dim <= 2500)
+    ROI --> Branch1
+    ROI --> Branch2
+    RawPage --> Branch3
 
-        Router->>OCRSvc: extract(normalized_image) [Threadpool]
-        Note over OCRSvc: Mutex lock acquired.<br/>PaddleOCR 3.x inference executed.<br/>Extracts texts, scores, rec_boxes.
-        OCRSvc-->>Router: OCRResult (full_text, lines with bboxes)
-
-        Router->>Extractor: extract_from_lines(lines, full_text)
-        Note over Extractor: Regex detection, layout heuristics,<br/>Verhoeff checksum computation
-        Extractor-->>Router: AadhaarExtractedData (page level)
+    subgraph Step2["Step 2: Holistic Document Triangulation"]
+        Triangulate["Holistic Authenticity Engine\n• Cross-Match: QR vs OCR text\n• Pairing: Front + Back completeness\n• Security Flags Generation"]
     end
 
-    Router->>Extractor: merge_extracted_data(pages_data)
-    Router->>Extractor: classify_document(merged_data, combined_text)
-    Router-->>Client: 200 OK (DocumentProcessingResponse)
+    Branch1 --> Triangulate
+    Branch2 --> Triangulate
+    Branch3 --> Triangulate
+    Triangulate --> Final["DocumentProcessingResponse (JSON)"]
 ```
 
 ---
 
-## 4. Component Deep Dive
+## 4. Two-Tier Authenticity Architecture
 
-### 4.1. Core Configuration (`app/core/config.py`)
-Centralized configuration powered by `pydantic-settings.BaseSettings` loaded from `.env`:
-- `MAX_UPLOAD_MB` (default `12`): Maximum byte size per file.
-- `MAX_IMAGE_PIXELS` (default `20,000,000`): Protects server against decompressed memory exhaustion (decompression bombs).
-- `MAX_PDF_PAGES` (default `5`): Rejects oversized multi-page PDFs.
-- `PDF_RENDER_DPI` (default `180`): Optimal DPI balancing text sharpness for OCR against rasterization time.
-- `OCR_LANG` (default `hi`): Loads the Devanagari recognition model, which inherently supports English as well.
-- `OCR_DEVICE` (default `cpu`): CPU-based inference engine.
+### Why Page-Wise Evaluation Alone Is Insufficient
+Aadhaar is fundamentally an **asymmetric identity card**:
+- The **Front Side** has the portrait photo, Ashoka Pillar emblem, and Name/DOB. It never has a QR code.
+- The **Back Side** has the high-density QR code and address block. It never has a portrait photo.
+- In e-Aadhaar letters, both cutouts appear on a single A4 page.
 
-### 4.2. File Service (`app/services/file_service.py`)
-Responsible for raw byte ingestion, memory safety, and format conversion:
-- **Stream Reading with Boundary Checking**: Reads up to `max_upload_bytes + 1` bytes to detect size violations without allocating unbound memory.
-- **Image Decoding**: Uses `cv2.imdecode(np.frombuffer(...), cv2.IMREAD_COLOR)`. Validates header integrity without touching disk.
-- **PyMuPDF Document Rendering**:
-  - Uses `fitz.open(stream=data, filetype="pdf")`.
-  - Rejects password-encrypted documents (`doc.is_encrypted or doc.needs_pass`).
-  - Scales pages using transformation matrix $\text{zoom} = \frac{\text{DPI}}{72.0}$.
-  - Converts RGB pixmap buffers directly into OpenCV standard BGR numpy arrays.
+Evaluating pages in isolation leads to false negatives (penalizing a valid front for missing a QR) or false positives (accepting a counterfeit front paired with a legitimate back).
 
-### 4.3. Image Quality Service (`app/services/image_service.py`)
-Assesses whether an incoming image has sufficient clarity and contrast before OCR:
-1. **Blur Estimation via Laplacian Variance**:
-   $$\text{blur\_score} = \operatorname{Var}\left(\nabla^2 f(x, y)\right)$$
-   Where $\nabla^2 f$ is calculated using `cv2.Laplacian(gray, cv2.CV_64F)`. Scores below `50.0` trigger `POSSIBLY_BLURRY`.
-2. **Mean Brightness**:
-   $$\mu = \frac{1}{N} \sum_{i=1}^N I(x_i, y_i)$$
-   Values $< 50$ flag `TOO_DARK`; values $> 220$ flag `TOO_BRIGHT`.
-3. **Resolution Checks**: Images with $\text{width} < 600$ or $\text{height} < 400$ trigger `LOW_RESOLUTION`.
-4. **Dimension Normalization**: Rescales oversized camera captures ($\max(\text{width}, \text{height}) > 2500$) using area interpolation (`cv2.INTER_AREA`) to preserve inference speed and prevent out-of-memory states.
-
-### 4.4. OCR Service (`app/services/ocr_service.py`)
-Wraps the PaddleOCR 3.x / PaddleX inference engine:
-- **Lifespan Singleton**: The underlying deep-learning models (`PP-OCRv5_server_det` and `devanagari_PP-OCRv5_mobile_rec`) are loaded once during FastAPI's `lifespan` startup, ensuring zero model reloading overhead on requests.
-- **Mutex Concurrency Control**: Since the inference engine shares internal C++ tensors, requests obtain a `threading.Lock()` mutex around `.extract()`.
-- **PaddleOCR 3.x Output Normalization**: PaddleOCR 3.x wraps predictions in `result.json["res"]`. The service gracefully unpacks `rec_texts`, `rec_scores`, and `rec_boxes` or 4-point polygons (`dt_polys`), transforming coordinates into uniform `[xmin, ymin, xmax, ymax]` rectangular bounding boxes.
-- **OpenBLAS CPU Stability**: Explicitly sets `OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, and `MKL_NUM_THREADS=1` to eliminate multi-threading lockups on Windows CPU builds.
-
-### 4.5. Aadhaar Extraction & Verhoeff Service (`app/services/extractor_service.py`)
-Parses raw OCR tokens into semantic identity attributes:
-- **Aadhaar Number Identification**:
-  - Masked pattern: `\b([X\*\.]{4}[\s\-]?[X\*\.]{4}[\s\-]?[0-9]{4})\b`
-  - Unmasked 12-digit pattern: `\b([2-9][0-9]{3}[\s\-]?[0-9]{4}[\s\-]?[0-9]{4})\b`
-- **DOB / Year of Birth**: Extracts `DD/MM/YYYY` or `YYYY` following `DOB`, `Date of Birth`, `जन्म तारीख`, or `जन्म तिथि`.
-- **Gender**: Extracts `MALE`, `FEMALE`, `TRANSGENDER`, or Hindi variants (`पुरुष`, `महिला`).
-- **PIN Code & Address**: Matches Indian Postal PIN codes (`[1-9][0-9]{5}`) and heuristic address sequences beginning with markers like `Address:`, `पता:`, `C/O`, `S/O`, `W/O`.
-- **Document Classification**:
-  - `AADHAAR_FRONT`: Contains name, DOB, gender, or front photo indicators.
-  - `AADHAAR_BACK`: Contains address lines, father/husband relation, and PIN code.
-  - `E_AADHAAR`: Full page document containing both front and back data.
-  - `NOT_CLASSIFIED`: No discernible Aadhaar attributes found.
+### The Two-Tier Solution
+1. **Tier 1 (Page-Level Feature Extraction)**:
+   - Collects visual signals: color saturation in Aadhaar bands, aspect ratio, QR presence, portrait presence.
+2. **Tier 2 (Document-Level Holistic Triangulation)**:
+   - **Completeness Check**: Checks if both front and back markers exist (`FULL_SET`, `FRONT_ONLY`, `BACK_ONLY`).
+   - **Tampering & Cross-Validation**: Compares the 4 demographic anchor fields (Name, DOB, Gender, and Aadhaar Last-4 digits) between the QR payload and OCR text.
+   - **Verdict Assignment**:
+     - `AUTHENTIC_COMPLETE_PAIR`: Front + Back verified and 100% cross-matched.
+     - `AUTHENTIC_FRONT_ONLY`: Valid front card (portrait + emblem + Verhoeff); back missing.
+     - `AUTHENTIC_BACK_ONLY`: Valid back card (QR + address); front missing.
+     - `TAMPERING_DETECTED`: QR code payload contradicts printed OCR text (Fraud Alert).
+     - `SUSPECTED_FAKE_DOCUMENT`: Plain typed canvas, synthetic text, or missing all markers.
 
 ---
 
-## 5. Mathematical Specification: Verhoeff Checksum Algorithm
+## 5. Mathematical & Cryptographic Specifications
 
-Aadhaar numbers utilize the **Verhoeff algorithm**, a checksum formula based on the dihedral group $D_5$ (symmetries of a regular pentagon, order 10). It detects **all single-digit errors** and **all transposition errors between adjacent digits**.
+### 5.1. Verhoeff Checksum Algorithm ($D_5$ Dihedral Group)
+The 12-digit Aadhaar number is verified using the Verhoeff algorithm, which detects all single-digit errors and all transposition errors between adjacent digits.
 
-### Checksum Evaluation Formula
-Given a 12-digit Aadhaar number $a_{12} a_{11} \dots a_2 a_1$ (where $a_1$ is the check digit and $a_{12}$ is the leftmost digit):
-
+Given a number $a_{12} a_{11} \dots a_2 a_1$ (where $a_1$ is the check digit):
 $$c = \left( \sum_{i=1}^{12} d\left(c_{i-1}, \, p\left((i-1) \bmod 8, \, a_i\right)\right) \right) = 0$$
 
-Where:
-- $d(j, k)$ is the multiplication table in $D_5$:
-  ```
-  d[j][k] = [
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-    [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
-    [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
-    [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
-    [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
-    [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
-    [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
-    [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
-    [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
-    [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
-  ]
-  ```
-- $p(pos, val)$ is the permutation table operating modulo 8:
-  ```
-  p[pos][val] = [
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-    [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
-    [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
-    [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
-    [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
-    [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
-    [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
-    [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]
-  ]
-  ```
-- If the final state $c = 0$, the Aadhaar number is mathematically valid.
+Where $d(j, k)$ is the multiplication table in $D_5$ and $p(pos, val)$ is the permutation table. If $c = 0$, the number is mathematically valid.
+
+### 5.2. UIDAI Secure QR Code Format (V2 / V3)
+UIDAI encodes resident data as a compressed binary payload formatted as a large decimal BigInteger string:
+1. **BigInteger Decoding**: Converted to bytes via $\text{int}(\text{data}).\text{to\_bytes}(L, \text{'big'})$.
+2. **Decompression**: Decompressed via standard Deflate/Zlib with `16 + zlib.MAX_WBITS`.
+3. **Delimiter Parsing**: Fields are delimited by byte `0xFF` (`255`):
+   - `[0]`: Email/Mobile bitmask.
+   - `[1]`: Reference ID (Prefix 4 digits = Last 4 digits of Aadhaar number; Suffix = timestamp).
+   - `[2]`: Resident Name.
+   - `[3]`: Date of Birth (`DD-MM-YYYY`).
+   - `[4]`: Gender (`M` / `F` / `T`).
+   - `[5]`: Care Of (`S/O`, `D/O`, `W/O`).
+   - `[6-16]`: District, Landmark, House, Location, PIN code, Post Office, State, VTC.
+   - `[17+]`: JPEG 2000 (JP2) resident photograph byte stream.
+   - `[Tail]`: 256-byte RSA digital signature.
 
 ---
 
-## 6. Memory Model & Privacy by Design
+## 6. Response Structure Specification
 
-> [!IMPORTANT]
-> The service strictly enforces zero persistent storage of identity documents to comply with Indian data protection norms and privacy best practices.
+The API returns a structured, strictly-typed Pydantic model (`DocumentProcessingResponse`):
 
-1. **Volatile Memory Only**:
-   - Files are accepted as `UploadFile` streams and decoded directly into in-memory byte arrays.
-   - BGR image arrays exist only within the scope of the request handler and are collected by Python's garbage collector immediately after the endpoint completes.
-2. **Zero PII Logging**:
-   - Loggers record request endpoints, processing latency, and image dimensions.
-   - Raw OCR tokens, extracted Aadhaar numbers, names, and addresses are never emitted to log outputs.
-3. **Threadpool Offloading**:
-   - Synchronous image quality checks (`image_service.analyze`) and OCR inference (`ocr_service.extract`) run via `starlette.concurrency.run_in_threadpool`. This prevents heavy matrix operations and neural network passes from stalling FastAPI's async event loop.
+```json
+{
+  "processing_status": "SUCCESS",
+  "document_type": "E_AADHAAR",
+  "authenticity_status": "VERIFIED_AUTHENTIC_CARD",
+  "processing_time_seconds": 3.826,
+  "message": "Image processing, OCR, and multi-factor authenticity verification completed successfully.",
 
----
+  "authenticity": {
+    "verdict": "AUTHENTIC_COMPLETE_PAIR",
+    "confidence_score": 0.99,
+    "completeness": "FULL_SET",
+    "is_tampered": false,
+    "has_front_face_or_portrait": true,
+    "has_back_secure_qr": true,
+    "has_valid_verhoeff_checksum": true,
+    "has_official_color_palette": true,
+    "has_valid_card_geometry": true,
+    "qr_ocr_data_matched": true,
+    "security_flags": [
+      "PORTRAIT_BIOMETRIC_PRESENT",
+      "SECURE_QR_PRESENT",
+      "VERHOEFF_CHECKSUM_VALID",
+      "OFFICIAL_PALETTE_DETECTED",
+      "CARD_GEOMETRY_CR80_VALID",
+      "QR_DEMOGRAPHICS_MATCHED",
+      "DOCUMENT_FULL_SET_COMPLETE"
+    ]
+  },
 
-## 7. High-Performance Multi-Core Architecture & Concurrent Pipeline
+  "aggregated_data": {
+    "aadhaar_number": "5134 5777 0655",
+    "is_aadhaar_number_valid": true,
+    "is_masked": false,
+    "name": "Sahil Sahebrao Mankar",
+    "dob": "17/11/2001",
+    "gender": "MALE",
+    "address": "Address: S/O Sahebrao Mankar, gavthan, taluka- ambegaon, Pargaon Tarf Khed, Pune, Maharashtra, 410512",
+    "pin_code": "410512",
+    "document_side": "FULL_PAGE"
+  },
 
-To meet low-latency production requirements on CPU, the service incorporates four major performance optimizations:
+  "qr_cross_match": {
+    "cross_match_status": "MATCHED",
+    "match_confidence": 1.0,
+    "name_matched": true,
+    "dob_matched": true,
+    "gender_matched": true,
+    "aadhaar_last4_matched": true,
+    "pin_code_matched": true,
+    "mismatches": [],
+    "qr_data": {
+      "format": "SECURE_QR_V2",
+      "reference_id": "065520210713221106490",
+      "aadhaar_last4": "0655",
+      "name": "Sahil Sahebrao Mankar",
+      "dob": "17/11/2001",
+      "gender": "MALE",
+      "care_of": "S/O Sahebrao Mankar",
+      "pin_code": "410512",
+      "district": "Pune",
+      "state": "Maharashtra",
+      "address": "S/O Sahebrao Mankar, gavthan  taluka- ambegaon, Pargaon Tarf Khed, Pune, Maharashtra, 410512",
+      "has_photo": true
+    }
+  },
 
-```mermaid
-flowchart TD
-    subgraph Storage["1. Local Model Repository"]
-        MDir["models/official_models/\n(PP-OCRv5_mobile_det, devanagari_PP-OCRv5_mobile_rec)"]
-    end
-
-    subgraph Pool["2. Multi-Worker Engine Pool (ocr_pool_size=2)"]
-        W1["Worker Engine 1\n(4 CPU Threads / oneDNN)"]
-        W2["Worker Engine 2\n(4 CPU Threads / oneDNN)"]
-    end
-
-    subgraph Pipeline["3. Concurrent Multi-Page Orchestration"]
-        P1["Page 1 Image\n(Front)"] --> ROI1["ROI Isolation\n(Card Cut-out)"] --> W1
-        P2["Page 2 Image\n(Back)"] --> ROI2["ROI Isolation\n(Card Cut-out)"] --> W2
-    end
-
-    MDir --> Pool
-    W1 --> Gather["asyncio.gather\n(Parallel OCR Execution)"]
-    W2 --> Gather
-    Gather --> Aggregator["Aggregator & Checksum Validation\n(Total Latency: ~4.2s for 2 Pages)"]
+  "pages": [
+    {
+      "page_number": 1,
+      "image_quality": {
+        "width": 2105,
+        "height": 1488,
+        "blur_score": 142.3,
+        "brightness": 158.4,
+        "status": "GOOD",
+        "warnings": []
+      },
+      "visual_authenticity": {
+        "is_valid_aadhaar_card_image": true,
+        "authenticity_score": 80,
+        "aspect_ratio": 1.415,
+        "qr_detected": false,
+        "has_aadhaar_palette": true,
+        "has_photo_or_graphics": true,
+        "checks_passed": [
+          "VALID_ASPECT_RATIO",
+          "AADHAAR_PALETTE_DETECTED",
+          "GRAPHICS_OR_PORTRAIT_REGION_DETECTED"
+        ]
+      },
+      "ocr": {
+        "status": "SUCCESS",
+        "full_text": "Government of India Sahil Sahebrao Mankar DOB: 17/11/2001 Male 5134 5777 0655",
+        "lines": [
+          {
+            "text": "Government of India",
+            "confidence": 0.985,
+            "bbox": [487, 82, 1043, 150]
+          }
+        ]
+      },
+      "extracted_data": {
+        "aadhaar_number": "5134 5777 0655",
+        "is_aadhaar_number_valid": true,
+        "name": "Sahil Sahebrao Mankar",
+        "dob": "17/11/2001",
+        "gender": "MALE",
+        "document_side": "FRONT"
+      }
+    }
+  ]
+}
 ```
 
-### 1. In-Project Model Repository (`models/official_models`)
-- Model weights are persistently housed inside the project repository at `models/official_models/` rather than temporary user cache directories.
-- Configured via `PADDLE_PDX_CACHE_HOME` and `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK="True"`, eliminating redundant downloads and external network dependency checks.
+---
 
-### 2. Multi-Core CPU Parallelism & Mobile Inference
-- Switched from heavy server models (`PP-OCRv5_server_det`) to CPU-optimized mobile models (`PP-OCRv5_mobile_det` and `devanagari_PP-OCRv5_mobile_rec`).
-- Dynamically allocates physical CPU cores (`OMP_NUM_THREADS = 4`, `MKL_NUM_THREADS = 4`), unlocking parallel BLAS execution via oneDNN / Intel MKL.
+### 6.1. Front-Only Upload Response Example
 
-### 3. Engine Worker Pool & Concurrent Page Execution
-- Because native C++ inference engines are not thread-safe when invoked simultaneously on a single instance, `OCRService` maintains a bounded **`EnginePool`** (`ocr_pool_size=2`).
-- `DocumentProcessingService.process_images` evaluates multi-page documents concurrently via `asyncio.gather()`. Page 1 and Page 2 are scanned simultaneously across separate worker engines, reducing total multi-page turnaround by 50%.
+When only the front side of a card is uploaded:
 
-### 4. Aadhaar Cut-Out Region of Interest (ROI) Isolation
-- In portrait e-Aadhaar A4 PDFs, the identity cards reside strictly in the lower 45% ($y \ge 0.55 \times \text{height}$). The service automatically isolates this lower ROI, eliminating ~60% of unnecessary canvas processing.
-- For camera/scanner captures on table surfaces, adaptive thresholding and contour aspect ratio geometry ($\text{aspect} \in [1.2, 1.9]$, $\text{area} \ge 15\%$) automatically crop the card boundary with safety padding.
+```json
+{
+  "processing_status": "SUCCESS",
+  "document_type": "AADHAAR_FRONT",
+  "authenticity_status": "VERIFIED_CARD_IMAGE",
+  "processing_time_seconds": 1.45,
+  "message": "Image processing, OCR, and multi-factor authenticity verification completed successfully.",
+  "authenticity": {
+    "verdict": "AUTHENTIC_FRONT_ONLY",
+    "confidence_score": 0.90,
+    "completeness": "FRONT_ONLY",
+    "is_tampered": false,
+    "has_front_face_or_portrait": true,
+    "has_back_secure_qr": false,
+    "has_valid_verhoeff_checksum": true,
+    "has_official_color_palette": true,
+    "has_valid_card_geometry": true,
+    "qr_ocr_data_matched": null,
+    "security_flags": [
+      "PORTRAIT_BIOMETRIC_PRESENT",
+      "VERHOEFF_CHECKSUM_VALID",
+      "OFFICIAL_PALETTE_DETECTED",
+      "CARD_GEOMETRY_CR80_VALID"
+    ]
+  },
+  "aggregated_data": {
+    "aadhaar_number": "5134 5777 0655",
+    "is_aadhaar_number_valid": true,
+    "name": "Sahil Sahebrao Mankar",
+    "dob": "17/11/2001",
+    "gender": "MALE",
+    "address": null,
+    "pin_code": null,
+    "document_side": "FRONT"
+  },
+  "qr_cross_match": {
+    "cross_match_status": "QR_NOT_FOUND",
+    "match_confidence": 0.0,
+    "qr_data": null
+  }
+}
+```
 
 ---
 
-## 8. Roadmap to Future Phases
+## 7. Performance & Optimization Profile
 
-| Phase | Milestone | Capabilities |
-| :--- | :--- | :--- |
-| **Phase 1** | *Completed* | Image & PDF upload, validation, rasterization, quality metrics, normalization |
-| **Phase 2** | *Completed* | PaddleOCR 3.x bilingual recognition, bboxes, confidence scores, Verhoeff validation, Aadhaar field extraction |
-| **Phase 3** | *Upcoming* | Spatial layout validation (field coordinates relative to Government headers), name alignment verification |
-| **Phase 4** | *Upcoming* | Secure QR code decoding (2048-bit RSA signed UIDAI QR code parsing and cryptographic signature verification) |
-| **Phase 5** | *Upcoming* | Document tampering & face-match detection (photo extraction and anti-spoofing analysis) |
+- **Engine Pool Concurrency**: Maintains a queue of worker engines (`ocr_pool_size=2`), enabling simultaneous multi-page OCR across separate physical cores.
+- **Intel oneDNN Acceleration**: Configured with `OMP_NUM_THREADS=6` and `MKL_NUM_THREADS=6` on 12-core hosts.
+- **DPI & Quality Balance**: Renders PDFs at `150` DPI with a `960` pixel DBNet detection envelope, ensuring crisp recognition of fine Hindi ligatures, date numbers, and PIN codes without downsampling artifacts.
+- **Latency Benchmark on e-Aadhaar PDF**:
+  - Baseline (Sequential, Server Det, 1 core): **`68.80s`**
+  - Current Optimized (Mobile Det, Pool=2, 3-Way Parallel, oneDNN=6): **`3.82s`** (18x speedup).

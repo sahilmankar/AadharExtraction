@@ -4,19 +4,20 @@ from pathlib import Path
 import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.api.document_routes import router
 from app.core.config import get_settings
 from app.core.container import Container
+from app.services.media_service import InvalidDocumentError
 
 # Direct PaddleX to project model cache and enable multi-core BLAS
 models_path = str(Path(__file__).resolve().parent.parent / "models")
 os.environ["PADDLE_PDX_CACHE_HOME"] = models_path
 os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
-os.environ["OMP_NUM_THREADS"] = "4"
-os.environ["MKL_NUM_THREADS"] = "4"
+os.environ["OMP_NUM_THREADS"] = "6"
+os.environ["MKL_NUM_THREADS"] = "6"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("aadhaar_validator")
@@ -26,13 +27,9 @@ settings = get_settings()
 container = Container()
 container.config.from_dict({
     "app_name": settings.app_name,
-    "app_env": settings.app_env,
     "max_upload_bytes": settings.max_upload_bytes,
-    "max_image_pixels": settings.max_image_pixels,
     "max_pdf_pages": settings.max_pdf_pages,
     "pdf_render_dpi": settings.pdf_render_dpi,
-    "ocr_lang": settings.ocr_lang,
-    "ocr_device": settings.ocr_device,
     "models_dir": settings.models_dir,
     "ocr_det_model": settings.ocr_det_model,
     "ocr_rec_model": settings.ocr_rec_model,
@@ -63,6 +60,11 @@ app = FastAPI(
 app.container = container
 
 
+@app.exception_handler(InvalidDocumentError)
+async def invalid_doc_handler(request: Request, exc: InvalidDocumentError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 @app.middleware("http")
 async def log_request_timing(request: Request, call_next):
     start = time.perf_counter()
@@ -87,9 +89,9 @@ async def health():
     return {
         "status": "healthy",
         "service": settings.app_name,
-        "ocr_lang": settings.ocr_lang,
         "ocr_det_model": settings.ocr_det_model,
         "ocr_rec_model": settings.ocr_rec_model,
+        "ocr_pool_size": settings.ocr_pool_size,
     }
 
 
