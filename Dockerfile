@@ -7,13 +7,16 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8000
 
 # Install Linux system dependencies needed for:
-# - pyzbar (libzbar0)
+# - OpenCV GUI/Rendering fallback (libgl1, libglib2.0-0, libsm6, libxext6)
+# - pyzbar barcode scanner (libzbar0)
 # - PaddlePaddle / OpenMP (libgomp1)
-# - OpenCV / PyMuPDF (libglib2.0-0)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
     libzbar0 \
     libgomp1 \
-    libglib2.0-0 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
