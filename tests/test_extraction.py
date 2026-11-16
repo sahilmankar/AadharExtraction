@@ -188,3 +188,44 @@ def test_qr_service_parsing_and_cross_match():
     assert mismatch_res["name_matched"] is False
     assert mismatch_res["aadhaar_last4_matched"] is False
     assert len(mismatch_res["mismatches"]) >= 2
+
+
+def test_bilingual_address_continuous_english_extraction():
+    extractor = AadhaarExtractorService()
+    lines = [
+        OCRLine(text="Unique Identification Authority of India", confidence=0.99, bbox=[50, 20, 400, 50]),
+        OCRLine(text="Address: W/O Sahebrao Mankar", confidence=0.98, bbox=[50, 80, 350, 110]),
+        OCRLine(text="पत्ता W/O, तालुका- आंबेगाव, पारगाब तर्फे खेड, पेठ", confidence=0.95, bbox=[50, 115, 450, 145]),
+        OCRLine(text="gavthan taluka- ambegaon", confidence=0.97, bbox=[50, 150, 300, 180]),
+        OCRLine(text="Pargaon Tarf Khed, Peth, Pune", confidence=0.96, bbox=[50, 185, 350, 215]),
+        OCRLine(text="410512", confidence=0.99, bbox=[50, 220, 120, 250]),
+        OCRLine(text="6681 1792 3507", confidence=0.99, bbox=[50, 270, 280, 300]),
+    ]
+    full_text = " ".join(l.text for l in lines)
+    extracted = extractor.extract_from_lines(lines, full_text)
+
+    assert extracted.address is not None
+    assert "पत्ता" not in extracted.address
+    assert "तालुका" not in extracted.address
+    assert "Address: W/O Sahebrao Mankar" in extracted.address
+    assert "gavthan taluka- ambegaon" in extracted.address
+    assert "Pargaon Tarf Khed, Peth, Pune" in extracted.address
+    assert "410512" in extracted.address
+    assert extracted.pin_code == "410512"
+
+
+def test_visual_qr_detection_on_compressed_card():
+    media_svc = MediaService()
+    # Create card with a 2D checkerboard/QR pattern
+    img = np.full((332, 601, 3), 255, dtype=np.uint8)
+    # Add high-frequency alternating 2D pattern at [180:315, 460:585]
+    for y in range(190, 290, 4):
+        for x in range(470, 570, 4):
+            if ((x // 4) + (y // 4)) % 2 == 0:
+                img[y:y+4, x:x+4] = (0, 0, 0)
+
+    vis = media_svc.analyze_visual_authenticity(img)
+    assert vis["qr_detected"] is True
+    assert "SECURE_QR_PATTERN_DETECTED" in vis["checks_passed"]
+
+

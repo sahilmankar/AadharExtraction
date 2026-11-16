@@ -63,7 +63,7 @@ flowchart TD
     
     subgraph Step0["Step 0: Pre-Processing (~30ms)"]
         Quality["Image Quality Analysis\n(Laplacian blur, brightness, dims)"]
-        ROI["Card ROI Isolation\n(Lower 45% or table contour crop)"]
+        ROI["Card ROI Isolation\n(Adaptive contour crop & embedded stream extraction)"]
     end
     
     RawPage --> Quality
@@ -82,7 +82,7 @@ flowchart TD
         end
 
         subgraph Branch3["Part 3: QR Data Extraction"]
-            QRDec["pyzbar QR Scanner\n• V2 BigInt / Zlib Deflate\n• V1 XML Fallback\n• Resident Photo JP2 presence"]
+            QRDec["pyzbar QR Scanner\n• V2 BigInt / Zlib Deflate\n• V1 XML Fallback\n• High-frequency 2D texture fallback"]
         end
     end
 
@@ -105,10 +105,10 @@ flowchart TD
 ## 4. Two-Tier Authenticity Architecture
 
 ### Why Page-Wise Evaluation Alone Is Insufficient
-Aadhaar is fundamentally an **asymmetric identity card**:
-- The **Front Side** has the resident portrait photo, official tricolor palette, bilingual Government typography, and Name/DOB. It never has a QR code.
-- The **Back Side** has the high-density QR code and address block. It never has a portrait photo.
-- In e-Aadhaar letters, both cutouts appear on a single A4 page.
+Aadhaar is fundamentally an **asymmetric identity card across two design generations**:
+- **Front Side**: Contains resident portrait photo, official tricolor palette, bilingual Government typography, and Name/DOB. On **Older Cards (issued pre-2018)**, the QR code was printed directly on the front side.
+- **Back Side**: Contains permanent address block, postal PIN, and UIDAI contact info. On **Modern Cards (issued 2019+)**, the high-density Secure QR code was moved to the back side.
+- **e-Aadhaar PDF**: Both front and back cutouts are printed together on a single A4 page.
 
 Evaluating pages in isolation leads to false negatives (penalizing a valid front for missing a QR) or false positives (accepting a counterfeit front paired with a legitimate back).
 
@@ -162,33 +162,9 @@ The API returns a structured, strictly-typed Pydantic model (`DocumentProcessing
 {
   "processing_status": "SUCCESS",
   "document_type": "E_AADHAAR",
-  "authenticity_status": "VERIFIED_AUTHENTIC_CARD",
-  "processing_time_seconds": 3.826,
-  "message": "Image processing, OCR, and multi-factor authenticity verification completed successfully.",
+  "processing_time_seconds": 1.826,
 
-  "authenticity": {
-    "verdict": "AUTHENTIC_COMPLETE_PAIR",
-    "confidence_score": 0.99,
-    "completeness": "FULL_SET",
-    "is_tampered": false,
-    "has_front_face_or_portrait": true,
-    "has_back_secure_qr": true,
-    "has_valid_verhoeff_checksum": true,
-    "has_official_color_palette": true,
-    "has_valid_card_geometry": true,
-    "qr_ocr_data_matched": true,
-    "security_flags": [
-      "PORTRAIT_BIOMETRIC_PRESENT",
-      "SECURE_QR_PRESENT",
-      "VERHOEFF_CHECKSUM_VALID",
-      "OFFICIAL_PALETTE_DETECTED",
-      "CARD_GEOMETRY_CR80_VALID",
-      "QR_DEMOGRAPHICS_MATCHED",
-      "DOCUMENT_FULL_SET_COMPLETE"
-    ]
-  },
-
-  "aggregated_data": {
+  "card_data": {
     "aadhaar_number": "5134 5777 0655",
     "is_aadhaar_number_valid": true,
     "is_masked": false,
@@ -198,6 +174,27 @@ The API returns a structured, strictly-typed Pydantic model (`DocumentProcessing
     "address": "Address: S/O Sahebrao Mankar, gavthan, taluka- ambegaon, Pargaon Tarf Khed, Pune, Maharashtra, 410512",
     "pin_code": "410512",
     "document_side": "FULL_PAGE"
+  },
+
+  "authenticity": {
+    "verdict": "AUTHENTIC_COMPLETE_PAIR",
+    "confidence_score": 0.99,
+    "completeness": "FULL_SET",
+    "has_front_face_or_portrait": true,
+    "has_secure_qr": true,
+    "qr_position": "BACK",
+    "has_official_color_palette": true,
+    "has_valid_card_geometry": true,
+    "security_flags": [
+      "PORTRAIT_BIOMETRIC_PRESENT",
+      "SECURE_QR_PRESENT",
+      "MODERN_BACK_QR_DETECTED",
+      "VERHOEFF_CHECKSUM_VALID",
+      "OFFICIAL_PALETTE_DETECTED",
+      "CARD_GEOMETRY_CR80_VALID",
+      "QR_DEMOGRAPHICS_MATCHED",
+      "DOCUMENT_FULL_SET_COMPLETE"
+    ]
   },
 
   "qr_cross_match": {
@@ -238,7 +235,6 @@ The API returns a structured, strictly-typed Pydantic model (`DocumentProcessing
       },
       "visual_authenticity": {
         "is_valid_aadhaar_card_image": true,
-        "authenticity_score": 80,
         "aspect_ratio": 1.415,
         "qr_detected": false,
         "has_aadhaar_palette": true,
@@ -251,22 +247,7 @@ The API returns a structured, strictly-typed Pydantic model (`DocumentProcessing
       },
       "ocr": {
         "status": "SUCCESS",
-        "full_text": "Government of India Sahil Sahebrao Mankar DOB: 17/11/2001 Male 5134 5777 0655",
-        "lines": [
-          {
-            "text": "Government of India",
-            "confidence": 0.985,
-            "bbox": [487, 82, 1043, 150]
-          }
-        ]
-      },
-      "extracted_data": {
-        "aadhaar_number": "5134 5777 0655",
-        "is_aadhaar_number_valid": true,
-        "name": "Sahil Sahebrao Mankar",
-        "dob": "17/11/2001",
-        "gender": "MALE",
-        "document_side": "FRONT"
+        "full_text": "Government of India Sahil Sahebrao Mankar DOB: 17/11/2001 Male 5134 5777 0655"
       }
     }
   ]
@@ -283,28 +264,8 @@ When only the front side of a card is uploaded:
 {
   "processing_status": "SUCCESS",
   "document_type": "AADHAAR_FRONT",
-  "authenticity_status": "VERIFIED_CARD_IMAGE",
   "processing_time_seconds": 1.45,
-  "message": "Image processing, OCR, and multi-factor authenticity verification completed successfully.",
-  "authenticity": {
-    "verdict": "AUTHENTIC_FRONT_ONLY",
-    "confidence_score": 0.90,
-    "completeness": "FRONT_ONLY",
-    "is_tampered": false,
-    "has_front_face_or_portrait": true,
-    "has_back_secure_qr": false,
-    "has_valid_verhoeff_checksum": true,
-    "has_official_color_palette": true,
-    "has_valid_card_geometry": true,
-    "qr_ocr_data_matched": null,
-    "security_flags": [
-      "PORTRAIT_BIOMETRIC_PRESENT",
-      "VERHOEFF_CHECKSUM_VALID",
-      "OFFICIAL_PALETTE_DETECTED",
-      "CARD_GEOMETRY_CR80_VALID"
-    ]
-  },
-  "aggregated_data": {
+  "card_data": {
     "aadhaar_number": "5134 5777 0655",
     "is_aadhaar_number_valid": true,
     "name": "Sahil Sahebrao Mankar",
@@ -313,6 +274,22 @@ When only the front side of a card is uploaded:
     "address": null,
     "pin_code": null,
     "document_side": "FRONT"
+  },
+  "authenticity": {
+    "verdict": "AUTHENTIC_FRONT_ONLY",
+    "confidence_score": 0.90,
+    "completeness": "FRONT_ONLY",
+    "has_front_face_or_portrait": true,
+    "has_secure_qr": false,
+    "qr_position": "NOT_FOUND",
+    "has_official_color_palette": true,
+    "has_valid_card_geometry": true,
+    "security_flags": [
+      "PORTRAIT_BIOMETRIC_PRESENT",
+      "VERHOEFF_CHECKSUM_VALID",
+      "OFFICIAL_PALETTE_DETECTED",
+      "CARD_GEOMETRY_CR80_VALID"
+    ]
   },
   "qr_cross_match": {
     "cross_match_status": "QR_NOT_FOUND",

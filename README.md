@@ -14,14 +14,17 @@ A privacy-focused, high-performance local Aadhaar image parsing, OCR extraction,
   - All document pages execute simultaneously across a multi-engine worker pool (`ocr_pool_size=2`) utilizing Intel oneDNN / MKL multi-threading.
   - Complete 2-page e-Aadhaar turnaround in **~3.8 seconds** (down from 68.8s baseline).
 - **Two-Tier Side-Aware Authenticity Architecture**:
+  - **Dual Card Generation Support**: Accurately recognizes both **Older Cards (QR printed on Front side)** and **Modern Cards (QR printed on Back side)** without misclassifying single-side uploads.
   - **Front Side**: Validates resident biometric portrait/graphics region density, bilingual Government of India typography, official tricolor/maroon palette, and card geometry (ISO/IEC 7810 ID-1 CR80 ratio).
-  - **Back Side**: Validates UIDAI 2D Secure QR Code, address block, and UIDAI contact stamps.
+  - **Back Side**: Validates address block, postal PIN, and UIDAI contact stamps.
   - **Document Triangulation**: Cross-validates QR code payload against OCR-extracted demographics to detect Photoshop edits, swapped card sides, or fake documents.
 - **UIDAI QR Code Decoding & Decompression**:
+  - **pyzbar Scanner with 2D Texture Fallback**: Scans official QR codes with high-frequency 2D texture fallback for compressed scans.
   - **Secure QR (V2/V3)**: Decompresses decimal BigInteger / Zlib binary payloads and parses Reference ID, Name, DOB, Gender, Care-Of, District, PIN code, State, and embedded photo presence.
   - **Legacy XML QR (V1)**: Decodes `<PrintLetterBarcodeData ... />` attributes.
 - **Mathematical Validation**: Verifies 12-digit Aadhaar numbers against the standard UIDAI Verhoeff dihedral group $D_{10}$ checksum algorithm.
-- **Card ROI Isolation**: Automatically isolates the identity card cut-out section ($y \ge 0.55 \times \text{height}$) from full-page A4 e-Aadhaar documents and camera scanner backgrounds.
+- **Bilingual Continuous English Address Extraction**: On dual-language card formats (Hindi/Marathi/Regional + English), ignores Devanagari lines and extracts strictly the clean, continuous English address block up to the postal code.
+- **Adaptive Card ROI Isolation**: Uses adaptive contour bounding box detection to locate cards placed anywhere on portrait or landscape PDF pages (top, middle, or bottom), and extracts lossless embedded image streams from scanned PDFs.
 - **Dependency Injection**: Built with `dependency-injector` for seamless component decoupling, swapping, and mocking in unit tests.
 
 ---
@@ -84,6 +87,7 @@ pip install -r requirements.txt
 .venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
+- **Interactive Web Demo UI**: [http://127.0.0.1:8000/](http://127.0.0.1:8000/) or [http://127.0.0.1:8000/demo](http://127.0.0.1:8000/demo)
 - **Interactive API Documentation (Swagger UI)**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 - **Health Check**: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
 
@@ -133,10 +137,10 @@ Instant test of OCR, layout classification, and Verhoeff validation without uplo
 
 The API returns a unified JSON response divided into 4 key sections:
 1. **Metadata & Status**: Request status, overall document type, processing time.
-2. **Holistic Authenticity (`authenticity`)**: Side-aware multi-factor security evaluation, tampering detection, and security flags.
-3. **Aggregated Demographics (`aggregated_data`)**: Unified identity attributes merged across all pages.
+2. **Holistic Authenticity (`authenticity`)**: Side-aware multi-factor security evaluation, card geometry checks, and security flags.
+3. **Card Data (`card_data`)**: Consolidated identity attributes extracted and validated from the document.
 4. **QR Cross-Match (`qr_cross_match`)**: Decoded QR payload and field-by-field comparison against OCR text.
-5. **Per-Page Breakdown (`pages`)**: Granular quality diagnostics, page-level visual metrics, and raw OCR bounding boxes.
+5. **Per-Page Breakdown (`pages`)**: Granular quality diagnostics, page-level visual metrics, and OCR status.
 
 ### Complete Response Example
 
@@ -144,33 +148,9 @@ The API returns a unified JSON response divided into 4 key sections:
 {
   "processing_status": "SUCCESS",
   "document_type": "E_AADHAAR",
-  "authenticity_status": "VERIFIED_AUTHENTIC_CARD",
-  "processing_time_seconds": 3.826,
-  "message": "Image processing, OCR, and multi-factor authenticity verification completed successfully.",
+  "processing_time_seconds": 1.826,
 
-  "authenticity": {
-    "verdict": "AUTHENTIC_COMPLETE_PAIR",
-    "confidence_score": 0.99,
-    "completeness": "FULL_SET",
-    "is_tampered": false,
-    "has_front_face_or_portrait": true,
-    "has_back_secure_qr": true,
-    "has_valid_verhoeff_checksum": true,
-    "has_official_color_palette": true,
-    "has_valid_card_geometry": true,
-    "qr_ocr_data_matched": true,
-    "security_flags": [
-      "PORTRAIT_BIOMETRIC_PRESENT",
-      "SECURE_QR_PRESENT",
-      "VERHOEFF_CHECKSUM_VALID",
-      "OFFICIAL_PALETTE_DETECTED",
-      "CARD_GEOMETRY_CR80_VALID",
-      "QR_DEMOGRAPHICS_MATCHED",
-      "DOCUMENT_FULL_SET_COMPLETE"
-    ]
-  },
-
-  "aggregated_data": {
+  "card_data": {
     "aadhaar_number": "5134 5777 0655",
     "is_aadhaar_number_valid": true,
     "is_masked": false,
@@ -180,6 +160,27 @@ The API returns a unified JSON response divided into 4 key sections:
     "address": "Address: S/O Sahebrao Mankar, gavthan, taluka- ambegaon, Pargaon Tarf Khed, Pune, Maharashtra, 410512",
     "pin_code": "410512",
     "document_side": "FULL_PAGE"
+  },
+
+  "authenticity": {
+    "verdict": "AUTHENTIC_COMPLETE_PAIR",
+    "confidence_score": 0.99,
+    "completeness": "FULL_SET",
+    "has_front_face_or_portrait": true,
+    "has_secure_qr": true,
+    "qr_position": "BACK",
+    "has_official_color_palette": true,
+    "has_valid_card_geometry": true,
+    "security_flags": [
+      "PORTRAIT_BIOMETRIC_PRESENT",
+      "SECURE_QR_PRESENT",
+      "MODERN_BACK_QR_DETECTED",
+      "VERHOEFF_CHECKSUM_VALID",
+      "OFFICIAL_PALETTE_DETECTED",
+      "CARD_GEOMETRY_CR80_VALID",
+      "QR_DEMOGRAPHICS_MATCHED",
+      "DOCUMENT_FULL_SET_COMPLETE"
+    ]
   },
 
   "qr_cross_match": {
@@ -220,7 +221,6 @@ The API returns a unified JSON response divided into 4 key sections:
       },
       "visual_authenticity": {
         "is_valid_aadhaar_card_image": true,
-        "authenticity_score": 80,
         "aspect_ratio": 1.415,
         "qr_detected": false,
         "has_aadhaar_palette": true,
@@ -233,17 +233,12 @@ The API returns a unified JSON response divided into 4 key sections:
       },
       "ocr": {
         "status": "SUCCESS",
-        "full_text": "Government of India Sahil Sahebrao Mankar DOB: 17/11/2001 Male 5134 5777 0655",
-        "lines": [
-          {
-            "text": "Government of India",
-            "confidence": 0.985,
-            "bbox": [487, 82, 1043, 150]
-          },
-          {
-            "text": "Sahil Sahebrao Mankar",
-            "confidence": 0.962,
-            "bbox": [594, 310, 1180, 370]
+        "full_text": "Government of India Sahil Sahebrao Mankar DOB: 17/11/2001 Male 5134 5777 0655"
+      }
+    }
+  ]
+}
+```
           },
           {
             "text": "5134 5777 0655",
@@ -344,4 +339,4 @@ When only the front side is uploaded (`POST /api/v1/documents/images` with only 
 .venv\Scripts\python -m pytest -v
 ```
 
-All 21 automated unit and API integration tests execute with 100% pass rate.
+All 22 automated unit and API integration tests execute with 100% pass rate.

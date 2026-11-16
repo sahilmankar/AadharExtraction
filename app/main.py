@@ -4,7 +4,8 @@ from pathlib import Path
 import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from app.api.document_routes import router
@@ -79,8 +80,17 @@ async def log_request_timing(request: Request, call_next):
         raise e
 
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
 @app.get("/", include_in_schema=False)
-async def root_redirect():
+@app.get("/demo", include_in_schema=False)
+async def serve_demo():
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
     return RedirectResponse(url="/docs")
 
 

@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-50 text-slate-800">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aadhaar Data Extraction & Format Validation</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Clean enterprise scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #f8fafc; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  </style>
+</head>
+<body class="min-h-full flex flex-col font-sans antialiased bg-slate-50 text-slate-800 selection:bg-blue-100 selection:text-blue-900">
+
+  <!-- Top Navigation Bar -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-sm">
+          <i data-lucide="file-check-2" class="w-6 h-6 stroke-[2.2]"></i>
+        </div>
+        <div>
+          <span class="text-lg font-bold tracking-tight text-slate-900 flex items-center gap-2">
+            Aadhaar Extractor
+            <span class="text-[11px] px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 font-semibold">Portal</span>
+          </span>
+          <p class="text-xs text-slate-500">OCR Extraction & Card Format Validations</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-3 text-sm">
+        <a href="/docs" target="_blank" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 font-medium transition flex items-center gap-1.5 text-xs shadow-xs">
+          <i data-lucide="code-2" class="w-3.5 h-3.5 text-slate-500"></i>
+          <span>API Docs (Swagger)</span>
+        </a>
+        <a href="/health" target="_blank" class="px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 flex items-center gap-1.5 text-xs font-semibold">
+          <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+          <span>Engine Active</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+    <!-- Header Description -->
+    <div class="max-w-2xl">
+      <h1 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
+        Aadhaar Data Extraction & Format Validation
+      </h1>
+      <p class="text-slate-600 text-sm sm:text-base mt-1.5 leading-relaxed">
+        Extract resident details from Aadhaar card photos or e-Aadhaar PDF files, perform standard card format validations, and cross-check printed text against the card's QR code.
+      </p>
+    </div>
+
+    <!-- Upload & Action Box -->
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 sm:p-7 space-y-6">
+
+      <!-- Upload Method Switcher -->
+      <div class="flex items-center justify-between border-b border-slate-200 pb-4 flex-wrap gap-4">
+        <div class="flex p-1 bg-slate-100 rounded-lg border border-slate-200 text-sm font-medium">
+          <button id="tabImages" onclick="switchMode('images')" class="px-4 py-1.5 rounded-md bg-white text-slate-900 shadow-xs font-semibold flex items-center gap-2 transition">
+            <i data-lucide="image" class="w-4 h-4 text-blue-600"></i>
+            <span>Card Photos (Front / Back)</span>
+          </button>
+          <button id="tabPdf" onclick="switchMode('pdf')" class="px-4 py-1.5 rounded-md text-slate-600 hover:text-slate-900 flex items-center gap-2 transition">
+            <i data-lucide="file-text" class="w-4 h-4 text-slate-500"></i>
+            <span>e-Aadhaar PDF File</span>
+          </button>
+        </div>
+
+        <!-- Instant Test Button -->
+        <button onclick="runSyntheticTest()" id="btnSynthetic" class="px-3.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-xs font-semibold flex items-center gap-1.5 transition">
+          <i data-lucide="sparkles" class="w-3.5 h-3.5 text-amber-600"></i>
+          <span>Try Sample Test (No File Needed)</span>
+        </button>
+      </div>
+
+      <!-- Mode 1: Dual Image Upload (Front & Back) -->
+      <div id="modeImages" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+        <!-- Front Card Slot -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between text-sm">
+            <span class="font-semibold text-slate-800 flex items-center gap-1.5">
+              <i data-lucide="id-card" class="w-4 h-4 text-blue-600"></i>
+              Front Side Photo <span class="text-rose-600">*</span>
+            </span>
+            <span class="text-xs text-slate-500">Reads Photo, Name & Aadhaar Number</span>
+          </div>
+
+          <div id="frontDropzone" onclick="document.getElementById('frontInput').click()" ondragover="handleDragOver(event, this)" ondragleave="handleDragLeave(event, this)" ondrop="handleDrop(event, 'front')" class="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-xl p-6 text-center cursor-pointer bg-slate-50/50 hover:bg-blue-50/30 transition h-48 flex flex-col items-center justify-center relative overflow-hidden group">
+            <input type="file" id="frontInput" accept="image/*" class="hidden" onchange="previewFile(this, 'front')">
+            <div id="frontPlaceholder" class="space-y-2 text-slate-500 group-hover:text-slate-700">
+              <div class="w-10 h-10 rounded-full bg-white border border-slate-200 mx-auto flex items-center justify-center text-slate-500 group-hover:text-blue-600 group-hover:border-blue-200 transition shadow-xs">
+                <i data-lucide="upload" class="w-5 h-5"></i>
+              </div>
+              <p class="text-xs font-medium"><span class="text-blue-600 font-semibold underline">Click to select</span> or drag front image here</p>
+              <p class="text-[11px] text-slate-400">JPG or PNG (Up to 12 MB)</p>
+            </div>
+            <img id="frontThumb" class="hidden max-h-full max-w-full object-contain rounded-lg shadow-xs">
+          </div>
+        </div>
+
+        <!-- Back Card Slot -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between text-sm">
+            <span class="font-semibold text-slate-800 flex items-center gap-1.5">
+              <i data-lucide="qr-code" class="w-4 h-4 text-emerald-600"></i>
+              Back Side Photo <span class="text-slate-400 font-normal text-xs">(Optional)</span>
+            </span>
+            <span class="text-xs text-slate-500">Reads Address & QR Code</span>
+          </div>
+
+          <div id="backDropzone" onclick="document.getElementById('backInput').click()" ondragover="handleDragOver(event, this)" ondragleave="handleDragLeave(event, this)" ondrop="handleDrop(event, 'back')" class="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-xl p-6 text-center cursor-pointer bg-slate-50/50 hover:bg-emerald-50/30 transition h-48 flex flex-col items-center justify-center relative overflow-hidden group">
+            <input type="file" id="backInput" accept="image/*" class="hidden" onchange="previewFile(this, 'back')">
+            <div id="backPlaceholder" class="space-y-2 text-slate-500 group-hover:text-slate-700">
+              <div class="w-10 h-10 rounded-full bg-white border border-slate-200 mx-auto flex items-center justify-center text-slate-500 group-hover:text-emerald-600 group-hover:border-emerald-200 transition shadow-xs">
+                <i data-lucide="upload" class="w-5 h-5"></i>
+              </div>
+              <p class="text-xs font-medium"><span class="text-emerald-600 font-semibold underline">Click to select</span> or drag back image here</p>
+              <p class="text-[11px] text-slate-400">JPG or PNG (Up to 12 MB)</p>
+            </div>
+            <img id="backThumb" class="hidden max-h-full max-w-full object-contain rounded-lg shadow-xs">
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Mode 2: PDF Upload -->
+      <div id="modePdf" class="hidden space-y-2">
+        <div class="flex items-center justify-between text-sm">
+          <span class="font-semibold text-slate-800 flex items-center gap-1.5">
+            <i data-lucide="file-text" class="w-4 h-4 text-purple-600"></i>
+            e-Aadhaar PDF File <span class="text-rose-600">*</span>
+          </span>
+          <span class="text-xs text-slate-500">Official Downloaded PDF Document</span>
+        </div>
+
+        <div id="pdfDropzone" onclick="document.getElementById('pdfInput').click()" ondragover="handleDragOver(event, this)" ondragleave="handleDragLeave(event, this)" ondrop="handleDrop(event, 'pdf')" class="border-2 border-dashed border-slate-300 hover:border-purple-500 rounded-xl p-6 text-center cursor-pointer bg-slate-50/50 hover:bg-purple-50/30 transition h-48 flex flex-col items-center justify-center group">
+          <input type="file" id="pdfInput" accept="application/pdf" class="hidden" onchange="previewPdf(this)">
+          <div id="pdfPlaceholder" class="space-y-2 text-slate-500 group-hover:text-slate-700">
+            <div class="w-10 h-10 rounded-full bg-white border border-slate-200 mx-auto flex items-center justify-center text-slate-500 group-hover:text-purple-600 transition shadow-xs">
+              <i data-lucide="file-up" class="w-5 h-5"></i>
+            </div>
+            <p class="text-xs font-medium"><span class="text-purple-600 font-semibold underline">Choose PDF document</span> or drag file here</p>
+            <p class="text-[11px] text-slate-400">Must be an unlocked PDF (Up to 12 MB)</p>
+          </div>
+          <div id="pdfSelected" class="hidden flex items-center gap-3 text-purple-800 text-sm font-semibold bg-purple-50 px-4 py-2.5 rounded-lg border border-purple-200">
+            <i data-lucide="file-check" class="w-5 h-5 text-purple-600"></i>
+            <span id="pdfName"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Bar -->
+      <div class="flex items-center justify-between pt-2 border-t border-slate-100">
+        <button id="btnClear" onclick="resetForm()" class="px-3 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-800 transition flex items-center gap-1.5">
+          <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+          <span>Clear Selection</span>
+        </button>
+
+        <button id="btnSubmit" onclick="submitExtraction()" class="px-6 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-medium text-sm shadow-sm transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+          <i data-lucide="play" class="w-4 h-4 fill-white"></i>
+          <span>Extract & Validate Format</span>
+        </button>
+      </div>
+
+      <!-- Loading State -->
+      <div id="loadingState" class="hidden py-8 text-center space-y-3">
+        <div class="inline-flex items-center justify-center w-10 h-10 rounded-full bg-blue-50 text-blue-600">
+          <i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i>
+        </div>
+        <div>
+          <p class="text-sm font-semibold text-slate-800">Reading card & validating format...</p>
+          <p class="text-xs text-slate-500 mt-0.5">Extracting demographic text, checking card layout, and decoding QR payload.</p>
+        </div>
+      </div>
+
+      <!-- Error Alert Box -->
+      <div id="errorBox" class="hidden p-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-start gap-3">
+        <i data-lucide="alert-circle" class="w-5 h-5 text-rose-600 shrink-0 mt-0.5"></i>
+        <div>
+          <p class="font-semibold text-xs text-rose-900">Extraction Error</p>
+          <p id="errorMessage" class="text-xs text-rose-700 mt-0.5"></p>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- RESULTS DASHBOARD -->
+    <div id="resultsSection" class="hidden space-y-6">
+
+      <!-- Status Header Bar -->
+      <div class="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 flex items-center justify-between flex-wrap gap-4 shadow-xs">
+        <div class="flex items-center space-x-3">
+          <span id="statusBadge" class="px-3 py-1 rounded-full text-xs font-bold tracking-wide"></span>
+          <span id="docTypeBadge" class="px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200"></span>
+        </div>
+        <div class="text-xs text-slate-500 flex items-center gap-1.5 font-medium">
+          <i data-lucide="clock" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span>Extraction completed in <strong id="timingValue" class="text-slate-800 font-semibold">0.0s</strong></span>
+        </div>
+      </div>
+
+      <!-- Dual Column Details Grid -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- Left Column: Format Validation Verdict & Checklist (5 cols) -->
+        <div class="lg:col-span-5 space-y-6">
+
+          <!-- Card Format Validation Card -->
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-5">
+            <div class="flex items-center justify-between">
+              <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500">Format & Quality Check</h2>
+              <span id="completenessBadge" class="text-xs px-2.5 py-0.5 rounded-full font-semibold"></span>
+            </div>
+
+            <!-- Main Verdict Banner -->
+            <div id="verdictBanner" class="p-4 rounded-xl border flex items-center gap-3.5">
+              <div id="verdictIconBox" class="w-11 h-11 rounded-lg flex items-center justify-center shrink-0"></div>
+              <div>
+                <p id="verdictTitle" class="text-base font-bold"></p>
+                <p id="verdictSubtitle" class="text-xs text-slate-600 mt-0.5"></p>
+              </div>
+            </div>
+
+            <!-- Confidence / Format Score Meter -->
+            <div class="space-y-1.5">
+              <div class="flex justify-between text-xs font-medium">
+                <span class="text-slate-600">Card Format Confidence</span>
+                <span id="confidenceValue" class="text-slate-900 font-bold"></span>
+              </div>
+              <div class="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div id="confidenceBar" class="h-full bg-emerald-500 rounded-full transition-all duration-500" style="width: 0%"></div>
+              </div>
+            </div>
+
+            <!-- Format Validations Checklist -->
+            <div class="space-y-2.5 pt-3 border-t border-slate-100">
+              <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Format & Layout Validations</p>
+              <div id="securityChecklist" class="space-y-1.5 text-xs"></div>
+            </div>
+          </div>
+
+          <!-- Document Quality Check -->
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-3">
+            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500">Image & Print Diagnostics</h2>
+            <div id="qualityDetailsBox" class="space-y-2.5 text-xs"></div>
+          </div>
+
+        </div>
+
+        <!-- Right Column: Extracted Identity & QR Comparison (7 cols) -->
+        <div class="lg:col-span-7 space-y-6">
+
+          <!-- Extracted Resident Identity Card Box -->
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden space-y-5 p-6 relative">
+            <!-- Official Card Color Stripe -->
+            <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-orange-400 via-slate-200 to-emerald-500"></div>
+
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div class="text-xs font-bold tracking-tight text-slate-800">Extracted Resident Identity Information</div>
+              <span class="text-[11px] text-slate-500 font-medium">Card Layout Details</span>
+            </div>
+
+            <!-- Aadhaar Number -->
+            <div class="space-y-1">
+              <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Extracted Aadhaar Number</span>
+              <div class="flex items-center gap-3">
+                <span id="aadhaarNumberDisplay" class="text-2xl font-mono font-bold tracking-wider text-slate-900">---- ---- ----</span>
+                <span id="verhoeffBadge" class="text-xs px-2.5 py-0.5 rounded-full font-semibold"></span>
+              </div>
+            </div>
+
+            <!-- Demographics Grid -->
+            <div class="grid grid-cols-2 gap-4 text-xs pt-1">
+              <div class="space-y-1">
+                <span class="font-medium text-slate-500">Resident Name</span>
+                <p id="nameDisplay" class="font-bold text-slate-800 text-sm">--</p>
+              </div>
+              <div class="space-y-1">
+                <span class="font-medium text-slate-500">Date of Birth (DOB)</span>
+                <p id="dobDisplay" class="font-bold text-slate-800 text-sm">--</p>
+              </div>
+              <div class="space-y-1">
+                <span class="font-medium text-slate-500">Gender</span>
+                <p id="genderDisplay" class="font-semibold text-slate-800 text-sm">--</p>
+              </div>
+              <div class="space-y-1">
+                <span class="font-medium text-slate-500">PIN Code</span>
+                <p id="pinDisplay" class="font-semibold text-slate-800 text-sm">--</p>
+              </div>
+            </div>
+
+            <!-- Address Block -->
+            <div class="space-y-1 pt-3 border-t border-slate-100 text-xs">
+              <span class="font-medium text-slate-500">Permanent Address</span>
+              <p id="addressDisplay" class="text-slate-700 leading-relaxed font-normal">--</p>
+            </div>
+          </div>
+
+          <!-- QR Code vs Printed Text Cross-Check Table -->
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div class="flex items-center justify-between">
+              <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500">QR Code vs Printed Text Cross-Check</h2>
+              <span id="qrStatusBadge" class="text-xs px-2.5 py-0.5 rounded-full font-semibold"></span>
+            </div>
+
+            <p class="text-xs text-slate-500">
+              Cross-checks the demographic text read from the card against the compressed data decoded from the card's QR code to detect discrepancies or layout edits.
+            </p>
+
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs text-left">
+                <thead class="bg-slate-50 text-slate-600 border-y border-slate-200">
+                  <tr>
+                    <th class="py-2.5 px-3 font-semibold">Field</th>
+                    <th class="py-2.5 px-3 font-semibold">Text on Card (OCR)</th>
+                    <th class="py-2.5 px-3 font-semibold">Data from QR Code</th>
+                    <th class="py-2.5 px-3 font-semibold text-right">Cross-Check</th>
+                  </tr>
+                </thead>
+                <tbody id="crossMatchTableBody" class="divide-y divide-slate-100">
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Developer Raw JSON (Collapsible) -->
+      <div class="bg-white rounded-xl border border-slate-200 shadow-xs p-4">
+        <button onclick="toggleJsonView()" class="w-full flex items-center justify-between text-xs text-slate-600 hover:text-slate-900 transition py-1 font-medium">
+          <span class="flex items-center gap-2">
+            <i data-lucide="code" class="w-4 h-4 text-slate-400"></i>
+            <span>View Full API Response Payload (JSON)</span>
+          </span>
+          <span id="jsonToggleIcon" class="text-slate-400 text-xs">Show details ▼</span>
+        </button>
+        <div id="jsonContainer" class="hidden mt-3 pt-3 border-t border-slate-100 space-y-2">
+          <div class="flex justify-end">
+            <button onclick="copyJsonResponse()" id="btnCopyJson" class="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium flex items-center gap-1.5 transition">
+              <i data-lucide="copy" class="w-3.5 h-3.5 text-slate-500"></i>
+              <span>Copy JSON</span>
+            </button>
+          </div>
+          <pre id="jsonViewer" class="bg-slate-900 text-slate-100 p-4 rounded-lg text-xs font-mono overflow-x-auto max-h-96"></pre>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- Clean Footer -->
+  <footer class="border-t border-slate-200 bg-white py-6 text-center text-xs text-slate-500">
+    <p>Aadhaar Data Extraction & Format Checking Service · In-Memory Document Processing · Privacy Compliant</p>
+  </footer>
+
+  <!-- Client Scripting -->
+  <script>
+    let currentMode = 'images';
+    let lastJsonResponse = null;
+
+    // Friendly functional translations focusing on format checking & extraction
+    const FLAG_LABELS = {
+      'PORTRAIT_BIOMETRIC_PRESENT': 'Resident Photo Area Detected',
+      'SECURE_QR_PRESENT': 'Official Secure QR Code Decoded',
+      'SECURE_QR_PATTERN_PRESENT': '2D Barcode / QR Pattern Detected on Card',
+      'VERHOEFF_CHECKSUM_VALID': 'Aadhaar Number Mathematical Format Valid (Verhoeff)',
+      'OFFICIAL_PALETTE_DETECTED': 'Official Saffron & Green Colors Detected',
+      'CARD_GEOMETRY_CR80_VALID': 'Standard Card Dimensions Confirmed',
+      'QR_DEMOGRAPHICS_MATCHED': 'Printed Text Matches Decoded QR Payload',
+      'DOCUMENT_FULL_SET_COMPLETE': 'Both Front & Back Sides Extracted',
+      'LEGACY_FRONT_QR_DETECTED': 'Older Card Format (QR on Front Side)',
+      'MODERN_BACK_QR_DETECTED': 'Modern Card Format (QR on Back Side)',
+      'TAMPERING_MISMATCH_DETECTED': 'Discrepancy Detected Between QR and Printed Text'
+    };
+
+    function switchMode(mode) {
+      currentMode = mode;
+      const tabImages = document.getElementById('tabImages');
+      const tabPdf = document.getElementById('tabPdf');
+      const modeImages = document.getElementById('modeImages');
+      const modePdf = document.getElementById('modePdf');
+
+      if (mode === 'images') {
+        tabImages.className = 'px-4 py-1.5 rounded-md bg-white text-slate-900 shadow-xs font-semibold flex items-center gap-2 transition';
+        tabPdf.className = 'px-4 py-1.5 rounded-md text-slate-600 hover:text-slate-900 flex items-center gap-2 transition';
+        modeImages.classList.remove('hidden');
+        modePdf.classList.add('hidden');
+      } else {
+        tabPdf.className = 'px-4 py-1.5 rounded-md bg-white text-slate-900 shadow-xs font-semibold flex items-center gap-2 transition';
+        tabImages.className = 'px-4 py-1.5 rounded-md text-slate-600 hover:text-slate-900 flex items-center gap-2 transition';
+        modePdf.classList.remove('hidden');
+        modeImages.classList.add('hidden');
+      }
+      lucide.createIcons();
+    }
+
+    function handleDragOver(e, el) {
+      e.preventDefault();
+      el.classList.add('border-blue-500', 'bg-blue-50/50');
+    }
+    function handleDragLeave(e, el) {
+      e.preventDefault();
+      el.classList.remove('border-blue-500', 'bg-blue-50/50');
+    }
+    function handleDrop(e, slot) {
+      e.preventDefault();
+      const files = e.dataTransfer.files;
+      if (!files.length) return;
+      if (slot === 'front') {
+        document.getElementById('frontInput').files = files;
+        previewFile(document.getElementById('frontInput'), 'front');
+      } else if (slot === 'back') {
+        document.getElementById('backInput').files = files;
+        previewFile(document.getElementById('backInput'), 'back');
+      } else if (slot === 'pdf') {
+        document.getElementById('pdfInput').files = files;
+        previewPdf(document.getElementById('pdfInput'));
+      }
+    }
+
+    function previewFile(input, slot) {
+      if (!input.files || !input.files[0]) return;
+      const file = input.files[0];
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const thumb = document.getElementById(slot + 'Thumb');
+        const placeholder = document.getElementById(slot + 'Placeholder');
+        thumb.src = e.target.result;
+        thumb.classList.remove('hidden');
+        placeholder.classList.add('hidden');
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function previewPdf(input) {
+      if (!input.files || !input.files[0]) return;
+      const file = input.files[0];
+      document.getElementById('pdfName').textContent = `${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`;
+      document.getElementById('pdfPlaceholder').classList.add('hidden');
+      document.getElementById('pdfSelected').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function resetForm() {
+      document.getElementById('frontInput').value = '';
+      document.getElementById('backInput').value = '';
+      document.getElementById('pdfInput').value = '';
+
+      ['front', 'back'].forEach(slot => {
+        const thumb = document.getElementById(slot + 'Thumb');
+        const placeholder = document.getElementById(slot + 'Placeholder');
+        thumb.src = '';
+        thumb.classList.add('hidden');
+        placeholder.classList.remove('hidden');
+      });
+
+      document.getElementById('pdfPlaceholder').classList.remove('hidden');
+      document.getElementById('pdfSelected').classList.add('hidden');
+      document.getElementById('resultsSection').classList.add('hidden');
+      document.getElementById('errorBox').classList.add('hidden');
+      lastJsonResponse = null;
+    }
+
+    async function runSyntheticTest() {
+      setLoading(true);
+      try {
+        const res = await fetch('/api/v1/documents/test-synthetic', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Sample test run failed');
+        renderResults(data);
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function submitExtraction() {
+      document.getElementById('errorBox').classList.add('hidden');
+
+      if (currentMode === 'images') {
+        const frontFile = document.getElementById('frontInput').files[0];
+        const backFile = document.getElementById('backInput').files[0];
+
+        if (!frontFile) {
+          showError('Please select at least the Front Card Image to extract.');
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append('front_image', frontFile);
+        if (backFile) formData.append('back_image', backFile);
+
+        setLoading(true);
+        try {
+          const res = await fetch('/api/v1/documents/images', { method: 'POST', body: formData });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Card extraction failed');
+          renderResults(data);
+        } catch (err) {
+          showError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      } else {
+        const pdfFile = document.getElementById('pdfInput').files[0];
+        if (!pdfFile) {
+          showError('Please choose an unlocked e-Aadhaar PDF file.');
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', pdfFile);
+
+        setLoading(true);
+        try {
+          const res = await fetch('/api/v1/documents/pdf', { method: 'POST', body: formData });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'PDF extraction failed');
+          renderResults(data);
+        } catch (err) {
+          showError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      }
+    }
+
+    function setLoading(isLoading) {
+      const btn = document.getElementById('btnSubmit');
+      const loader = document.getElementById('loadingState');
+      if (isLoading) {
+        btn.disabled = true;
+        loader.classList.remove('hidden');
+        document.getElementById('resultsSection').classList.add('hidden');
+        document.getElementById('errorBox').classList.add('hidden');
+      } else {
+        btn.disabled = false;
+        loader.classList.add('hidden');
+      }
+      lucide.createIcons();
+    }
+
+    function showError(msg) {
+      const box = document.getElementById('errorBox');
+      document.getElementById('errorMessage').textContent = msg;
+      box.classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function renderResults(data) {
+      lastJsonResponse = data;
+      document.getElementById('resultsSection').classList.remove('hidden');
+
+      // Top Status Bar
+      const statusBadge = document.getElementById('statusBadge');
+      if (data.processing_status === 'SUCCESS') {
+        statusBadge.className = 'px-3 py-1 rounded-full text-xs font-bold tracking-wide bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-1.5';
+        statusBadge.innerHTML = '✔ Extraction & Format Check Complete';
+      } else {
+        statusBadge.className = 'px-3 py-1 rounded-full text-xs font-bold tracking-wide bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1.5';
+        statusBadge.innerHTML = '⚠ Partial Extraction';
+      }
+
+      const docTypeFriendly = {
+        'AADHAAR_FRONT': 'Front Side Card',
+        'AADHAAR_BACK': 'Back Side Card',
+        'E_AADHAAR': 'e-Aadhaar Document (Both Sides)',
+        'NOT_CLASSIFIED': 'Unclassified Document'
+      };
+      document.getElementById('docTypeBadge').textContent = docTypeFriendly[data.document_type] || data.document_type;
+      document.getElementById('timingValue').textContent = `${data.processing_time_seconds || 0} seconds`;
+
+      // Verdict Presentation
+      const auth = data.authenticity || {};
+      const verdictBanner = document.getElementById('verdictBanner');
+      const iconBox = document.getElementById('verdictIconBox');
+      const title = document.getElementById('verdictTitle');
+      const subtitle = document.getElementById('verdictSubtitle');
+
+      if (auth.verdict === 'AUTHENTIC_COMPLETE_PAIR') {
+        verdictBanner.className = 'p-4 rounded-xl border border-emerald-200 bg-emerald-50/60 flex items-center gap-3.5';
+        iconBox.className = 'w-11 h-11 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0';
+        iconBox.innerHTML = '<i data-lucide="check-circle-2" class="w-6 h-6"></i>';
+        title.className = 'text-base font-bold text-emerald-900';
+        title.textContent = 'Complete Card Extracted (Format Validated)';
+        subtitle.textContent = 'Both front and back details extracted and layout verified with QR code.';
+      } else if (auth.verdict === 'AUTHENTIC_FRONT_ONLY') {
+        verdictBanner.className = 'p-4 rounded-xl border border-blue-200 bg-blue-50/60 flex items-center gap-3.5';
+        iconBox.className = 'w-11 h-11 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center shrink-0';
+        iconBox.innerHTML = '<i data-lucide="id-card" class="w-6 h-6"></i>';
+        title.className = 'text-base font-bold text-blue-900';
+        title.textContent = 'Front Side Extracted (Format Validated)';
+        subtitle.textContent = 'Front details extracted successfully. Back side not provided.';
+      } else if (auth.verdict === 'AUTHENTIC_BACK_ONLY') {
+        verdictBanner.className = 'p-4 rounded-xl border border-indigo-200 bg-indigo-50/60 flex items-center gap-3.5';
+        iconBox.className = 'w-11 h-11 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0';
+        iconBox.innerHTML = '<i data-lucide="qr-code" class="w-6 h-6"></i>';
+        title.className = 'text-base font-bold text-indigo-900';
+        title.textContent = 'Back Side Extracted (Format Validated)';
+        subtitle.textContent = 'Back address and QR code extracted successfully. Front side not provided.';
+      } else if (auth.verdict === 'TAMPERING_DETECTED') {
+        verdictBanner.className = 'p-4 rounded-xl border border-rose-300 bg-rose-50/90 flex items-center gap-3.5';
+        iconBox.className = 'w-11 h-11 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0';
+        iconBox.innerHTML = '<i data-lucide="alert-triangle" class="w-6 h-6"></i>';
+        title.className = 'text-base font-bold text-rose-900';
+        title.textContent = 'Warning: Details Mismatch';
+        subtitle.textContent = 'The decoded QR code contains different data than the printed card text.';
+      } else {
+        verdictBanner.className = 'p-4 rounded-xl border border-amber-200 bg-amber-50/60 flex items-center gap-3.5';
+        iconBox.className = 'w-11 h-11 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0';
+        iconBox.innerHTML = '<i data-lucide="help-circle" class="w-6 h-6"></i>';
+        title.className = 'text-base font-bold text-amber-900';
+        title.textContent = 'Incomplete or Unclassified Document';
+        subtitle.textContent = 'The uploaded document does not match standard Aadhaar card layout markers.';
+      }
+
+      // Completeness Tag
+      const compFriendly = {
+        'FULL_SET': 'Both Sides Extracted',
+        'FRONT_ONLY': 'Front Side Only',
+        'BACK_ONLY': 'Back Side Only',
+        'INCOMPLETE': 'Incomplete'
+      };
+      const compBadge = document.getElementById('completenessBadge');
+      compBadge.textContent = compFriendly[auth.completeness] || auth.completeness;
+      compBadge.className = auth.completeness === 'FULL_SET'
+        ? 'text-xs px-2.5 py-0.5 rounded-full font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200'
+        : 'text-xs px-2.5 py-0.5 rounded-full font-semibold bg-blue-100 text-blue-800 border border-blue-200';
+
+      // Confidence Bar
+      const score = Math.round((auth.confidence_score || 0) * 100);
+      document.getElementById('confidenceValue').textContent = `${score}% Format Score`;
+      const bar = document.getElementById('confidenceBar');
+      bar.style.width = `${score}%`;
+      bar.className = score >= 90 ? 'h-full bg-emerald-500 rounded-full' : (score >= 70 ? 'h-full bg-blue-500 rounded-full' : 'h-full bg-amber-500 rounded-full');
+
+      // Format Validations Checklist
+      const checklistBox = document.getElementById('securityChecklist');
+      checklistBox.innerHTML = '';
+      (auth.security_flags || []).forEach(flag => {
+        const item = document.createElement('div');
+        item.className = 'flex items-center gap-2 text-slate-700';
+        const label = FLAG_LABELS[flag] || flag.replace(/_/g, ' ');
+        item.innerHTML = `<i data-lucide="check-circle" class="w-3.5 h-3.5 text-emerald-600 shrink-0"></i><span>${label}</span>`;
+        checklistBox.appendChild(item);
+      });
+
+      // Quality Diagnostics Box
+      const qualityBox = document.getElementById('qualityDetailsBox');
+      qualityBox.innerHTML = '';
+      (data.pages || []).forEach(p => {
+        const q = p.image_quality || {};
+        const v = p.visual_authenticity || {};
+        const row = document.createElement('div');
+        row.className = 'p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-1.5 text-xs';
+        row.innerHTML = `
+          <div class="flex justify-between font-semibold text-slate-800">
+            <span>Page ${p.page_number} (${q.width} × ${q.height} px)</span>
+            <span class="${q.status === 'GOOD' ? 'text-emerald-700' : 'text-amber-700'}">${q.status === 'GOOD' ? 'Clear & Readable' : 'Low Clarity'}</span>
+          </div>
+          <div class="grid grid-cols-2 gap-2 text-slate-600 text-[11px]">
+            <div>Card Dimensions: <span class="font-medium text-slate-800">${v.aspect_ratio ? 'Standard Card Ratio' : 'Normal'}</span></div>
+            <div>Official Colors: <span class="font-medium ${v.has_aadhaar_palette ? 'text-emerald-700' : 'text-slate-500'}">${v.has_aadhaar_palette ? 'Detected' : 'Not found'}</span></div>
+          </div>
+        `;
+        qualityBox.appendChild(row);
+      });
+
+      // Demographics Card
+      const agg = data.card_data || data.aggregated_data || {};
+      document.getElementById('aadhaarNumberDisplay').textContent = agg.aadhaar_number || '---- ---- ----';
+
+      const verhoeffBadge = document.getElementById('verhoeffBadge');
+      if (agg.is_aadhaar_number_valid) {
+        verhoeffBadge.className = 'text-xs px-2.5 py-0.5 rounded-full font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1';
+        verhoeffBadge.innerHTML = '✔ Valid Checksum';
+      } else {
+        verhoeffBadge.className = 'text-xs px-2.5 py-0.5 rounded-full font-semibold bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1';
+        verhoeffBadge.innerHTML = '✖ Invalid Number Format';
+      }
+
+      document.getElementById('nameDisplay').textContent = agg.name || 'Not Detected';
+      document.getElementById('dobDisplay').textContent = agg.dob || 'Not Detected';
+      document.getElementById('genderDisplay').textContent = agg.gender || 'Not Detected';
+      document.getElementById('pinDisplay').textContent = agg.pin_code || 'Not Detected';
+      document.getElementById('addressDisplay').textContent = agg.address || 'Not present on this side';
+
+      // QR Cross Match Table
+      const qrMatch = data.qr_cross_match || {};
+      const qrStatusBadge = document.getElementById('qrStatusBadge');
+      if (qrMatch.cross_match_status === 'MATCHED') {
+        qrStatusBadge.className = 'text-xs px-2.5 py-0.5 rounded-full font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200';
+        qrStatusBadge.textContent = 'Cross-Check: 100% Match';
+      } else if (qrMatch.cross_match_status === 'MISMATCH_DETECTED') {
+        qrStatusBadge.className = 'text-xs px-2.5 py-0.5 rounded-full font-semibold bg-rose-100 text-rose-800 border border-rose-200 animate-pulse';
+        qrStatusBadge.textContent = 'Cross-Check: Discrepancy Found';
+      } else if (auth.has_secure_qr && auth.qr_position === 'FRONT') {
+        qrStatusBadge.className = 'text-xs px-2.5 py-0.5 rounded-full font-semibold bg-blue-100 text-blue-800 border border-blue-200';
+        qrStatusBadge.textContent = 'Front QR Pattern Detected (Low Resolution Scan)';
+      } else if (auth.has_secure_qr && auth.qr_position === 'BACK') {
+        qrStatusBadge.className = 'text-xs px-2.5 py-0.5 rounded-full font-semibold bg-blue-100 text-blue-800 border border-blue-200';
+        qrStatusBadge.textContent = 'Back QR Pattern Detected (Low Resolution Scan)';
+      } else {
+        qrStatusBadge.className = 'text-xs px-2.5 py-0.5 rounded-full font-semibold bg-slate-100 text-slate-600 border border-slate-200';
+        qrStatusBadge.textContent = 'No QR Code Detected';
+      }
+
+      const qrData = qrMatch.qr_data || {};
+      const tableBody = document.getElementById('crossMatchTableBody');
+      tableBody.innerHTML = '';
+
+      const fields = [
+        { name: 'Resident Name', ocr: agg.name, qr: qrData.name, match: qrMatch.name_matched },
+        { name: 'Date of Birth', ocr: agg.dob, qr: qrData.dob, match: qrMatch.dob_matched },
+        { name: 'Gender', ocr: agg.gender, qr: qrData.gender, match: qrMatch.gender_matched },
+        { name: 'Last 4 Digits', ocr: agg.aadhaar_number ? agg.aadhaar_number.slice(-4) : null, qr: qrData.aadhaar_last4, match: qrMatch.aadhaar_last4_matched },
+        { name: 'PIN Code', ocr: agg.pin_code, qr: qrData.pin_code, match: qrMatch.pin_code_matched },
+      ];
+
+      fields.forEach(f => {
+        const row = document.createElement('tr');
+        const matchBadge = f.match === true
+          ? '<span class="text-emerald-700 font-semibold flex items-center justify-end gap-1"><i data-lucide="check" class="w-3.5 h-3.5"></i> Matched</span>'
+          : (f.match === false
+            ? '<span class="text-rose-700 font-semibold flex items-center justify-end gap-1"><i data-lucide="x" class="w-3.5 h-3.5"></i> Mismatch</span>'
+            : '<span class="text-slate-400 font-medium">--</span>');
+
+        row.innerHTML = `
+          <td class="py-2.5 px-3 font-medium text-slate-800">${f.name}</td>
+          <td class="py-2.5 px-3 text-slate-600">${f.ocr || '<span class="text-slate-400">Not present</span>'}</td>
+          <td class="py-2.5 px-3 text-slate-600">${f.qr || '<span class="text-slate-400">Not present</span>'}</td>
+          <td class="py-2.5 px-3 text-right">${matchBadge}</td>
+        `;
+        tableBody.appendChild(row);
+      });
+
+      // Raw JSON Viewer
+      document.getElementById('jsonViewer').textContent = JSON.stringify(data, null, 2);
+
+      lucide.createIcons();
+      document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function toggleJsonView() {
+      const c = document.getElementById('jsonContainer');
+      const icon = document.getElementById('jsonToggleIcon');
+      if (c.classList.contains('hidden')) {
+        c.classList.remove('hidden');
+        icon.textContent = 'Hide details ▲';
+      } else {
+        c.classList.add('hidden');
+        icon.textContent = 'Show details ▼';
+      }
+      lucide.createIcons();
+    }
+
+    function copyJsonResponse() {
+      if (!lastJsonResponse) return;
+      navigator.clipboard.writeText(JSON.stringify(lastJsonResponse, null, 2)).then(() => {
+        const btn = document.getElementById('btnCopyJson');
+        btn.innerHTML = '<i data-lucide="check" class="w-3.5 h-3.5 text-emerald-600"></i><span class="text-emerald-700">Copied!</span>';
+        lucide.createIcons();
+        setTimeout(() => {
+          btn.innerHTML = '<i data-lucide="copy" class="w-3.5 h-3.5 text-slate-500"></i><span>Copy JSON</span>';
+          lucide.createIcons();
+        }, 2000);
+      });
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+    });
+  </script>
+</body>
+</html>

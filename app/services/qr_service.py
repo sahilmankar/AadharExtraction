@@ -7,6 +7,50 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# UIDAI Secure QR Specification Constants
+# ---------------------------------------------------------------------------
+# Byte delimiter (0xFF = 255) separating text fields in decompressed V2/V3 QR payload
+UIDAI_FIELD_DELIMITER = b"\xff"
+
+# Standard minimum number of delimited fields in a valid UIDAI Secure QR payload
+UIDAI_MIN_FIELDS_COUNT = 16
+
+# Minimum fields count when biometric face JPEG thumbnail is embedded (index 20+)
+UIDAI_PHOTO_FIELDS_THRESHOLD = 20
+
+# Standard UIDAI Secure QR field positions after splitting on 0xFF:
+# 1: Reference ID (last 4 digits are Aadhaar last-4)
+# 2: Name
+# 3: DOB (DD-MM-YYYY)
+# 4: Gender (M/F)
+# 5: Care of (C/O, S/O, W/O, D/O)
+# 6: District
+# 9: Locality / Street
+# 10: PIN Code
+# 12: State
+# 15: Landmark
+UIDAI_FIELD_REF_ID = 1
+UIDAI_FIELD_NAME = 2
+UIDAI_FIELD_DOB = 3
+UIDAI_FIELD_GENDER = 4
+UIDAI_FIELD_CARE_OF = 5
+UIDAI_FIELD_DISTRICT = 6
+UIDAI_FIELD_LOCALITY = 9
+UIDAI_FIELD_PIN_CODE = 10
+UIDAI_FIELD_STATE = 12
+UIDAI_FIELD_LANDMARK = 15
+
+# Address field indices in standard display order:
+UIDAI_ADDRESS_FIELD_INDICES = [
+    UIDAI_FIELD_CARE_OF,
+    UIDAI_FIELD_LOCALITY,
+    UIDAI_FIELD_LANDMARK,
+    UIDAI_FIELD_DISTRICT,
+    UIDAI_FIELD_STATE,
+    UIDAI_FIELD_PIN_CODE,
+]
+
 
 def _normalize_name(name: str | None) -> str:
     if not name:
@@ -56,20 +100,18 @@ class AadhaarQRService:
     """
 
     def decode_qr_from_image(self, image: np.ndarray) -> dict | None:
-        """Finds and decodes any UIDAI QR code in the image."""
+        """Finds and decodes any UIDAI QR code in the image using pyzbar."""
         try:
             from pyzbar.pyzbar import decode
             decoded_objects = decode(image)
+            for obj in decoded_objects:
+                if obj.type == "QRCODE":
+                    parsed = self.parse_qr_payload(obj.data)
+                    if parsed:
+                        return parsed
         except Exception as e:
             logger.debug("pyzbar QR decoding failed or not available: %s", e)
-            return None
 
-        for obj in decoded_objects:
-            if obj.type != "QRCODE":
-                continue
-            parsed = self.parse_qr_payload(obj.data)
-            if parsed:
-                return parsed
         return None
 
     def parse_qr_payload(self, raw_data: bytes) -> dict | None:
@@ -93,15 +135,18 @@ class AadhaarQRService:
         try:
             decompressed: bytes
             if raw_data.isdigit():
+                # UIDAI V2 payload encoded as BigInteger decimal string
                 big_int = int(raw_data.decode("utf-8"))
+                # Standard formula to calculate exact byte length needed to store big_int: ceil(bits / 8)
                 byte_len = (big_int.bit_length() + 7) // 8
                 raw_bytes = big_int.to_bytes(byte_len, byteorder="big")
+                # 16 + zlib.MAX_WBITS enables gzip/deflate auto-detection (16 + 15 = 31)
                 decompressed = zlib.decompress(raw_bytes, 16 + zlib.MAX_WBITS)
             else:
                 decompressed = zlib.decompress(raw_data, 16 + zlib.MAX_WBITS)
 
-            parts = decompressed.split(b"\xff")
-            if len(parts) >= 16:
+            parts = decompressed.split(UIDAI_FIELD_DELIMITER)
+            if len(parts) >= UIDAI_MIN_FIELDS_COUNT:
                 def get_part(idx: int) -> str | None:
                     if idx < len(parts):
                         try:
@@ -111,31 +156,31 @@ class AadhaarQRService:
                             return None
                     return None
 
-                ref_id = get_part(1)
+                ref_id = get_part(UIDAI_FIELD_REF_ID)
                 aadhaar_last4 = ref_id[:4] if ref_id and len(ref_id) >= 4 and ref_id[:4].isdigit() else None
-                dob = _normalize_dob(get_part(3))
-                gender_raw = get_part(4)
+                dob = _normalize_dob(get_part(UIDAI_FIELD_DOB))
+                gender_raw = get_part(UIDAI_FIELD_GENDER)
                 gender = None
                 if gender_raw:
                     g = gender_raw.upper()
                     gender = "MALE" if g.startswith("M") else ("FEMALE" if g.startswith("F") else g)
 
-                address_items = [get_part(idx) for idx in [5, 9, 15, 6, 12, 10] if get_part(idx)]
+                address_items = [get_part(idx) for idx in UIDAI_ADDRESS_FIELD_INDICES if get_part(idx)]
                 address = ", ".join(address_items) if address_items else None
 
                 return {
                     "format": "SECURE_QR_V2",
                     "reference_id": ref_id,
                     "aadhaar_last4": aadhaar_last4,
-                    "name": get_part(2),
+                    "name": get_part(UIDAI_FIELD_NAME),
                     "dob": dob,
                     "gender": gender,
-                    "care_of": get_part(5),
-                    "district": get_part(6),
-                    "pin_code": get_part(10),
-                    "state": get_part(12),
+                    "care_of": get_part(UIDAI_FIELD_CARE_OF),
+                    "district": get_part(UIDAI_FIELD_DISTRICT),
+                    "pin_code": get_part(UIDAI_FIELD_PIN_CODE),
+                    "state": get_part(UIDAI_FIELD_STATE),
                     "address": address,
-                    "has_photo": len(parts) > 20,
+                    "has_photo": len(parts) > UIDAI_PHOTO_FIELDS_THRESHOLD,
                 }
         except Exception:
             pass
@@ -178,14 +223,15 @@ class AadhaarQRService:
             pass
         return None
 
-    def cross_match(self, ocr_data: Any, qr_data: dict | None) -> dict:
+    def cross_match(self, ocr_data: Any, qr_data: dict | None, has_visual_qr: bool = False) -> dict:
         """
         Cross-validates OCR extracted data against decoded QR payload.
         Detects tampering or counterfeit documents.
         """
         if not qr_data:
+            status = "PAYLOAD_UNREADABLE_LOW_RESOLUTION" if has_visual_qr else "QR_NOT_FOUND"
             return {
-                "cross_match_status": "QR_NOT_FOUND",
+                "cross_match_status": status,
                 "match_confidence": 0.0,
                 "name_matched": None,
                 "dob_matched": None,

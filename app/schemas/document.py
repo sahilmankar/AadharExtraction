@@ -13,7 +13,6 @@ class ImageQualityResult(BaseModel):
 
 class VisualAuthenticityResult(BaseModel):
     is_valid_aadhaar_card_image: bool
-    authenticity_score: int
     aspect_ratio: float
     qr_detected: bool
     has_aadhaar_palette: bool
@@ -61,7 +60,7 @@ class QRExtractedData(BaseModel):
 
 
 class QRCrossMatchResult(BaseModel):
-    cross_match_status: Literal["MATCHED", "MISMATCH_DETECTED", "QR_NOT_FOUND"]
+    cross_match_status: Literal["MATCHED", "MISMATCH_DETECTED", "QR_NOT_FOUND", "PAYLOAD_UNREADABLE_LOW_RESOLUTION"]
     match_confidence: float = Field(ge=0.0, le=1.0)
     name_matched: bool | None = None
     dob_matched: bool | None = None
@@ -77,7 +76,6 @@ class DocumentPageResult(BaseModel):
     image_quality: ImageQualityResult
     visual_authenticity: VisualAuthenticityResult | None = None
     ocr: OCRResult
-    extracted_data: AadhaarExtractedData | None = None
 
 
 class DocumentAuthenticityResult(BaseModel):
@@ -91,29 +89,19 @@ class DocumentAuthenticityResult(BaseModel):
     ]
     confidence_score: float = Field(ge=0.0, le=1.0)
     completeness: Literal["FULL_SET", "FRONT_ONLY", "BACK_ONLY", "INCOMPLETE"]
-    is_tampered: bool = False
     has_front_face_or_portrait: bool = False
-    has_back_secure_qr: bool = False
-    has_valid_verhoeff_checksum: bool = False
+    has_secure_qr: bool = False
+    qr_position: Literal["FRONT", "BACK", "NOT_FOUND"] = "NOT_FOUND"
     has_official_color_palette: bool = False
     has_valid_card_geometry: bool = False
-    qr_ocr_data_matched: bool | None = None
     security_flags: list[str] = Field(default_factory=list)
 
 
 class DocumentProcessingResponse(BaseModel):
     processing_status: Literal["SUCCESS", "PARTIAL", "FAILED"]
     document_type: Literal["AADHAAR_FRONT", "AADHAAR_BACK", "E_AADHAAR", "NOT_CLASSIFIED"] = "NOT_CLASSIFIED"
-    authenticity_status: Literal[
-        "VERIFIED_AUTHENTIC_CARD",
-        "VERIFIED_CARD_IMAGE",
-        "TAMPERING_DETECTED",
-        "SUSPECTED_NON_CARD",
-        "NOT_VERIFIED",
-    ] = "NOT_VERIFIED"
+    card_data: AadhaarExtractedData | None = None
     authenticity: DocumentAuthenticityResult | None = None
-    pages: list[DocumentPageResult] = Field(default_factory=list)
-    aggregated_data: AadhaarExtractedData | None = None
     qr_cross_match: QRCrossMatchResult | None = None
-    message: str
+    pages: list[DocumentPageResult] = Field(default_factory=list)
     processing_time_seconds: float = 0.0
