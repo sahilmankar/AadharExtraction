@@ -5,7 +5,7 @@ pydantic-settings>=2.4.0
 python-dotenv>=1.0.1
 dependency-injector>=4.45.0
 paddleocr>=3.0.0
-paddlepaddle>=3.0.0
+paddlepaddle==3.2.0
 numpy>=1.26,<3
 opencv-python-headless>=4.10.0.84
 PyMuPDF>=1.24
