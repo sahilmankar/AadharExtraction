@@ -4,8 +4,6 @@ FROM python:3.11-slim
 # Prevent Python from buffering stdout/stderr and writing .pyc files
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    FLAGS_use_mkldnn=0 \
-    PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=0 \
     PORT=8000
 
 # Install Linux system dependencies needed for:
