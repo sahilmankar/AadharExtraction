@@ -106,7 +106,7 @@ flowchart TD
 
 ### Why Page-Wise Evaluation Alone Is Insufficient
 Aadhaar is fundamentally an **asymmetric identity card**:
-- The **Front Side** has the portrait photo, Ashoka Pillar emblem, and Name/DOB. It never has a QR code.
+- The **Front Side** has the resident portrait photo, official tricolor palette, bilingual Government typography, and Name/DOB. It never has a QR code.
 - The **Back Side** has the high-density QR code and address block. It never has a portrait photo.
 - In e-Aadhaar letters, both cutouts appear on a single A4 page.
 
@@ -120,7 +120,7 @@ Evaluating pages in isolation leads to false negatives (penalizing a valid front
    - **Tampering & Cross-Validation**: Compares the 4 demographic anchor fields (Name, DOB, Gender, and Aadhaar Last-4 digits) between the QR payload and OCR text.
    - **Verdict Assignment**:
      - `AUTHENTIC_COMPLETE_PAIR`: Front + Back verified and 100% cross-matched.
-     - `AUTHENTIC_FRONT_ONLY`: Valid front card (portrait + emblem + Verhoeff); back missing.
+     - `AUTHENTIC_FRONT_ONLY`: Valid front card (portrait/graphics + palette + Verhoeff); back missing.
      - `AUTHENTIC_BACK_ONLY`: Valid back card (QR + address); front missing.
      - `TAMPERING_DETECTED`: QR code payload contradicts printed OCR text (Fraud Alert).
      - `SUSPECTED_FAKE_DOCUMENT`: Plain typed canvas, synthetic text, or missing all markers.

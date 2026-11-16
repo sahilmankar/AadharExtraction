@@ -14,7 +14,7 @@ A privacy-focused, high-performance local Aadhaar image parsing, OCR extraction,
   - All document pages execute simultaneously across a multi-engine worker pool (`ocr_pool_size=2`) utilizing Intel oneDNN / MKL multi-threading.
   - Complete 2-page e-Aadhaar turnaround in **~3.8 seconds** (down from 68.8s baseline).
 - **Two-Tier Side-Aware Authenticity Architecture**:
-  - **Front Side**: Validates resident biometric portrait photo, Ashoka Pillar national emblem, official tricolor/maroon palette, and card geometry (ISO/IEC 7810 ID-1 CR80 ratio).
+  - **Front Side**: Validates resident biometric portrait/graphics region density, bilingual Government of India typography, official tricolor/maroon palette, and card geometry (ISO/IEC 7810 ID-1 CR80 ratio).
   - **Back Side**: Validates UIDAI 2D Secure QR Code, address block, and UIDAI contact stamps.
   - **Document Triangulation**: Cross-validates QR code payload against OCR-extracted demographics to detect Photoshop edits, swapped card sides, or fake documents.
 - **UIDAI QR Code Decoding & Decompression**:
@@ -330,7 +330,7 @@ When only the front side is uploaded (`POST /api/v1/documents/images` with only 
 
 | Verdict | Meaning | Completeness | Confidence |
 | :--- | :--- | :--- | :---: |
-| **`AUTHENTIC_COMPLETE_PAIR`** | Front (portrait, emblem, Verhoeff) + Back (Secure QR, address) verified and 100% cross-matched. | `FULL_SET` | **0.95 – 0.99** |
+| **`AUTHENTIC_COMPLETE_PAIR`** | Front (portrait/graphics, palette, Verhoeff) + Back (Secure QR, address) verified and 100% cross-matched. | `FULL_SET` | **0.95 – 0.99** |
 | **`AUTHENTIC_FRONT_ONLY`** | Genuine front card verified; back side/QR was not provided in this upload. | `FRONT_ONLY` | **0.88 – 0.90** |
 | **`AUTHENTIC_BACK_ONLY`** | Genuine back card with Secure QR verified; front side/portrait was not provided. | `BACK_ONLY` | **0.88 – 0.92** |
 | **`TAMPERING_DETECTED`** | **Fraud Alert 🚨**: Back QR payload directly contradicts Front OCR text (e.g. modified name or number). | Any | **0.98** |
