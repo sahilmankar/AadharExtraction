@@ -71,7 +71,7 @@
         Aadhaar Data Extraction & Format Validation
       </h1>
       <p class="text-slate-600 text-sm sm:text-base mt-1.5 leading-relaxed">
-        Extract resident details from Aadhaar card photos or e-Aadhaar PDF files, perform standard card format validations, and cross-check printed text against the card's QR code.
+        Extract resident details from Aadhaar card photos or Aadhaar PDF files, perform standard card format validations, and cross-check printed text against the card's QR code.
       </p>
     </div>
 
@@ -87,14 +87,14 @@
           </button>
           <button id="tabPdf" onclick="switchMode('pdf')" class="px-4 py-1.5 rounded-md text-slate-600 hover:text-slate-900 flex items-center gap-2 transition">
             <i data-lucide="file-text" class="w-4 h-4 text-slate-500"></i>
-            <span>e-Aadhaar PDF File</span>
+            <span>Aadhaar PDF File</span>
           </button>
         </div>
 
         <!-- Instant Test Button -->
         <button onclick="runSyntheticTest()" id="btnSynthetic" class="px-3.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-xs font-semibold flex items-center gap-1.5 transition">
           <i data-lucide="sparkles" class="w-3.5 h-3.5 text-amber-600"></i>
-          <span>Try Sample Test (No File Needed)</span>
+          <span>Try Sample Test </span>
         </button>
       </div>
 
@@ -154,7 +154,7 @@
         <div class="flex items-center justify-between text-sm">
           <span class="font-semibold text-slate-800 flex items-center gap-1.5">
             <i data-lucide="file-text" class="w-4 h-4 text-purple-600"></i>
-            e-Aadhaar PDF File <span class="text-rose-600">*</span>
+            Aadhaar PDF File <span class="text-rose-600">*</span>
           </span>
           <span class="text-xs text-slate-500">Official Downloaded PDF Document</span>
         </div>
@@ -533,7 +533,7 @@
       } else {
         const pdfFile = document.getElementById('pdfInput').files[0];
         if (!pdfFile) {
-          showError('Please choose an unlocked e-Aadhaar PDF file.');
+          showError('Please choose an unlocked Aadhaar PDF file.');
           return;
         }
 
@@ -593,7 +593,7 @@
       const docTypeFriendly = {
         'AADHAAR_FRONT': 'Front Side Card',
         'AADHAAR_BACK': 'Back Side Card',
-        'E_AADHAAR': 'e-Aadhaar Document (Both Sides)',
+        'E_AADHAAR': 'Aadhaar Document (Both Sides)',
         'NOT_CLASSIFIED': 'Unclassified Document'
       };
       document.getElementById('docTypeBadge').textContent = docTypeFriendly[data.document_type] || data.document_type;
